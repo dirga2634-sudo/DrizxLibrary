@@ -28,7 +28,7 @@ DrizxUI is a lightweight Roblox UI library built with Lua. It features a modern 
 📦 Installation
 
 local DrizxUI = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/dirga2634-sudo/DrizxLibrary/main/DrizxUI.lua"
+    "https://raw.githubusercontent.com/dirga2634-sudo/DrizxLibrary/main/Library.lua"
 ))()
 
 local Window = DrizxUI:CreateWindow({
