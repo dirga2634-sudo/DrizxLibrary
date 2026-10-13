@@ -1,34 +1,25 @@
 --[[
-    DrizxUI Library v12.1.3
+    DrizxLibrary v13.1.0
+    Lightweight Roblox UI library for touch screens (mobile) and PC.
     Creators: absorpohonods & haibung03
 
-    Perubahan v12.1.3 (patch):
-    - Slider tidak lagi memaksa ScrollingEnabled = true: nilai asli disimpan dan dipulihkan lewat
-      penghitung kunci per tab (aman untuk dua slider yang digeser bersamaan).
+    Quick start:
+        local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/dirga2634-sudo/DrizxLibrary/main/Library.lua"))()
+        local Window = Library:CreateWindow({ Title = "Hub", SubTitle = "by you", Theme = "Dark" })
+        local Tab = Window:CreateTab("Main", "Home")
+        Tab:CreateButton({ Name = "Hello", Callback = function() Library:Notify({ Title = "Hi", Content = "Clicked!" }) end })
 
-    Perubahan v12.1.2 (patch):
-    - Lebar sidebar dibatasi supaya area konten selalu punya ruang minimum (computeSidebarWidth).
-    - Notifikasi memudar utuh (kartu, ikon, teks, progress bar, dan garis tepi).
-    - Koneksi kamera lama dihapus dari Window.Connections saat diputus.
+    Loading / window options for CreateWindow (all optional):
+        Loading = true            -- show the loading animation when the window is created (false = disable)
+        LoadingTitle = "Title"    -- text on the loading card (default: Title)
+        LoadingDuration = 1.8     -- loading time in seconds
+        LoadingSteps = { "Loading...", "Preparing...", "Done" }  -- status text for each stage
+        AutoOpen = true           -- open the window automatically after loading finishes
+        CloseAction = "Destroy"   -- X button: "Destroy" (remove the UI completely) or "Hide" (just hide it)
 
-    Perubahan v12.1.1 (patch):
-    - Area drag jendela dipisah dari tombol header (minimize/close tidak ikut memicu drag).
-    - bindDrag bisa dibatalkan & mendeteksi akhir drag yang terlewat. Drag dibatalkan otomatis saat
-      jendela dibuka/ditutup/diminimize, ganti tab, atau Destroy() -> scroll tidak bisa macet.
-    - Ukuran minimum jendela memakai batas desain (220x170) dan tidak pernah melebihi viewport.
-    - Destroy() mereset IsAnimating; ScreenGui yang dihancurkan dari luar ikut membersihkan semua koneksi.
+    New methods: Window:Close() (remove the UI with an animation), Window:FinishLoading() (skip loading)
 
-    Perubahan v12.1:
-    - Drag jendela utama, tombol melayang, dan slider kini pakai satu helper (bindDrag)
-      dengan pola input yang sama untuk mouse & touch.
-    - Tombol melayang: clamp Y diperbaiki (posisi dipakai dalam pixel, bukan campur scale).
-    - ScreenGui.IgnoreGuiInset = true supaya AbsolutePosition, input.Position, dan
-      ViewportSize berada di ruang koordinat yang sama.
-    - Ukuran jendela & sidebar adaptif, tidak lagi melebihi layar kecil.
-    - Notifikasi adaptif + tanpa thread menunggu (rantai Tween.Completed), jadi Destroy() bersih.
-    - Judul & subjudul di-escape sebelum masuk RichText.
-    - Callback user dibungkus pcall + warn supaya error tidak hilang diam-diam.
-    - Slider: seluruh kartu jadi area sentuh, scroll dimatikan saat slider digeser.
+    Full documentation: see README.md
 ]]--
 
 local Players = game:GetService("Players")
@@ -41,6 +32,8 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local DrizxUI = {}
 DrizxUI.__index = DrizxUI
+DrizxUI.Version = "13.1.0"
+DrizxUI.Windows = {}
 
 local TOPBAR_H = 38
 local TOGGLE_SIZE = 42
@@ -48,6 +41,76 @@ local DRAG_THRESHOLD = 6
 local MIN_WIN_W = 220
 local MIN_WIN_H = 170
 local MIN_CONTENT_W = 100
+
+-- Themes. Color tokens are used across all components.
+local Themes = {
+	Dark = {
+		Background   = Color3.fromRGB(13, 17, 23),
+		Card         = Color3.fromRGB(13, 17, 23),
+		Surface      = Color3.fromRGB(18, 22, 31),
+		Raised       = Color3.fromRGB(28, 34, 46),
+		Stroke       = Color3.fromRGB(45, 55, 72),
+		Accent       = Color3.fromRGB(0, 162, 255),
+		Text         = Color3.fromRGB(245, 247, 250),
+		SubText      = Color3.fromRGB(160, 175, 195),
+		Muted        = Color3.fromRGB(110, 125, 145),
+		Success      = Color3.fromRGB(46, 160, 67),
+		Notification = Color3.fromRGB(16, 20, 28),
+		Danger       = Color3.fromRGB(235, 87, 87),
+	},
+	Light = {
+		Background   = Color3.fromRGB(240, 243, 247),
+		Card         = Color3.fromRGB(255, 255, 255),
+		Surface      = Color3.fromRGB(232, 236, 242),
+		Raised       = Color3.fromRGB(214, 221, 231),
+		Stroke       = Color3.fromRGB(200, 208, 220),
+		Accent       = Color3.fromRGB(0, 120, 230),
+		Text         = Color3.fromRGB(22, 28, 38),
+		SubText      = Color3.fromRGB(88, 101, 122),
+		Muted        = Color3.fromRGB(125, 138, 156),
+		Success      = Color3.fromRGB(40, 150, 60),
+		Notification = Color3.fromRGB(255, 255, 255),
+		Danger       = Color3.fromRGB(220, 60, 60),
+	},
+}
+DrizxUI.Themes = Themes
+
+-- A theme can be a name ("Dark" / "Light") or an override table,
+-- for example { Base = "Light", Accent = Color3.fromRGB(255, 80, 120) }.
+local function resolveTheme(input)
+	local resolved = table.clone(Themes.Dark)
+	local overrides = nil
+
+	if type(input) == "string" then
+		if Themes[input] then
+			overrides = Themes[input]
+		else
+			warn("[DrizxLibrary] Theme '" .. input .. "' is unknown, using Dark.")
+		end
+	elseif type(input) == "table" then
+		local baseName = input.Base or input.Preset
+		if baseName ~= nil then
+			if Themes[baseName] then
+				for key, value in pairs(Themes[baseName]) do
+					resolved[key] = value
+				end
+			else
+				warn("[DrizxLibrary] Base theme '" .. tostring(baseName) .. "' is unknown, using Dark.")
+			end
+		end
+		overrides = input
+	end
+
+	if overrides then
+		for key, value in pairs(overrides) do
+			if resolved[key] ~= nil and typeof(value) == "Color3" then
+				resolved[key] = value
+			end
+		end
+	end
+
+	return resolved
+end
 
 -- Preset Icons Dictionary
 local IconPresets = {
@@ -86,13 +149,13 @@ end
 local function safeCall(label, fn, ...)
 	local ok, err = pcall(fn, ...)
 	if not ok then
-		warn("[DrizxUI] Error di callback " .. label .. ": " .. tostring(err))
+		warn("[DrizxLibrary] Error in callback " .. label .. ": " .. tostring(err))
 	end
 end
 
 local function computeSidebarWidth(w)
 	local sw = math.clamp(math.floor(w * 0.28), 80, 110)
-	-- Sidebar mengalah kalau area konten bakal kurang dari MIN_CONTENT_W
+	-- The sidebar yields if the content area would drop below MIN_CONTENT_W
 	return math.min(sw, math.max(48, w - 18 - MIN_CONTENT_W))
 end
 
@@ -102,9 +165,9 @@ local function computeWindowSize(vp)
 	return w, h
 end
 
--- Helper drag universal (mouse + touch). Mengembalikan daftar koneksi;
--- field .cancel berisi fungsi untuk membatalkan drag yang sedang berjalan.
--- onEnd(cancelled): cancelled = true bila drag dibatalkan paksa (bukan dilepas oleh user).
+-- Universal drag helper (mouse + touch). Returns a list of connections;
+-- the .cancel field holds a function that cancels the drag in progress.
+-- onEnd(cancelled): cancelled = true when the drag was force-cancelled (not released by the user).
 local function bindDrag(target, onBegin, onMove, onEnd)
 	local active = nil
 	local connections = {}
@@ -120,8 +183,8 @@ local function bindDrag(target, onBegin, onMove, onEnd)
 		if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
 
 		if active then
-			-- Event "lepas" bisa terlewat (misalnya mouse dilepas di luar jendela).
-			-- Kalau drag lama sudah berstatus selesai, bersihkan dulu lalu mulai yang baru.
+			-- The "release" event can be missed (e.g. the mouse is released outside the window).
+			-- If the previous drag is already finished, clean it up first, then start a new one.
 			local st = active.UserInputState
 			if input == active or st == Enum.UserInputState.End or st == Enum.UserInputState.Cancel then
 				finish(true)
@@ -159,14 +222,33 @@ local function bindDrag(target, onBegin, onMove, onEnd)
 	return connections
 end
 
+-- Library-level helper: operates on the most recently created window.
+function DrizxUI:Notify(notifConfig)
+	local win = self.Windows[#self.Windows]
+	if not win then
+		warn("[DrizxLibrary] Notify was called before any window exists. Create a window first with CreateWindow.")
+		return
+	end
+	win:Notify(notifConfig)
+end
+
+function DrizxUI:Destroy()
+	local list = table.clone(self.Windows)
+	self.Windows = {}
+	for _, win in ipairs(list) do
+		win:Destroy()
+	end
+end
+
 function DrizxUI:CreateWindow(config)
 	config = config or {}
-	local titleText  = tostring(config.Title or "Drizx Framework")
-	local subTitle   = tostring(config.SubTitle or "v12.1.3")
+	local Theme = resolveTheme(config.Theme)
+	local titleText  = tostring(config.Title or "DrizxLibrary")
+	local subTitle   = tostring(config.SubTitle or ("v" .. DrizxUI.Version))
 	local logoAsset  = parseIcon(config.Logo or "Zap")
 
 	local bgType     = config.BackgroundType or "Color"
-	local bgColor    = config.BackgroundColor or Color3.fromRGB(13, 17, 23)
+	local bgColor    = config.BackgroundColor or Theme.Background
 	local bgImage    = config.BackgroundImage or ""
 	local bgTransp   = config.BackgroundTransparency or 0
 
@@ -177,11 +259,12 @@ function DrizxUI:CreateWindow(config)
 		Connections = {},
 		ActiveTweens = {},
 		ActiveNotifications = {},
+		DestroyCallbacks = {},
 		IsAnimating = false,
 		IsDestroyed = false
 	}
 
-	local dragCancels = {} -- set: [fungsi cancel] = true
+	local dragCancels = {} -- set: [cancel function] = true
 
 	local function registerDrag(cancel)
 		dragCancels[cancel] = true
@@ -202,7 +285,7 @@ function DrizxUI:CreateWindow(config)
 		end
 	end
 
-	-- Tween terlacak: otomatis dibatalkan oleh Destroy(), callback tidak jalan setelah destroy.
+	-- Tracked tween: automatically cancelled by Destroy(); callbacks do not run after destroy.
 	local function playTween(instance, info, goal, onDone)
 		if Window.IsDestroyed then return nil end
 		local tw = TweenService:Create(instance, info, goal)
@@ -218,14 +301,16 @@ function DrizxUI:CreateWindow(config)
 		return tw
 	end
 
+	table.insert(DrizxUI.Windows, Window)
+
 	local screenGui = Instance.new("ScreenGui")
-	screenGui.Name = "DrizxUI_" .. tostring(math.random(10000, 99999))
+	screenGui.Name = "DrizxLibrary_" .. tostring(math.random(10000, 99999))
 	screenGui.ResetOnSpawn = false
 	screenGui.IgnoreGuiInset = true
 	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	screenGui.Parent = PlayerGui
 
-	-- Kalau ScreenGui dihapus dari luar (misalnya script lain), bersihkan semua koneksi juga.
+	-- If the ScreenGui is removed from outside (e.g. by another script), clean up all connections too.
 	local destroyedExternally = false
 	table.insert(Window.Connections, screenGui.Destroying:Connect(function()
 		destroyedExternally = true
@@ -255,7 +340,7 @@ function DrizxUI:CreateWindow(config)
 			math.clamp(y, 0, math.max(0, vp.Y - curH))
 	end
 
-	-- Notification Container (ukuran/posisi diatur oleh applyLayout)
+	-- Notification container (size/position handled by applyLayout)
 	local notifContainer = Instance.new("Frame")
 	notifContainer.Name = "DrizxNotifContainer"
 	notifContainer.Size = UDim2.new(0, 220, 1, -20)
@@ -273,14 +358,14 @@ function DrizxUI:CreateWindow(config)
 	function Window:Notify(notifConfig)
 		if Window.IsDestroyed then return end
 		notifConfig = notifConfig or {}
-		local title = tostring(notifConfig.Title or "Notifikasi")
+		local title = tostring(notifConfig.Title or "Notification")
 		local content = tostring(notifConfig.Content or "")
 		local duration = math.max(0.5, tonumber(notifConfig.Duration) or 3)
 		local icon = parseIcon(notifConfig.Icon or "Bell")
 
 		local card = Instance.new("Frame")
 		card.Size = UDim2.new(1, 0, 0, 56)
-		card.BackgroundColor3 = Color3.fromRGB(16, 20, 28)
+		card.BackgroundColor3 = Theme.Notification
 		card.BorderSizePixel = 0
 		card.ClipsDescendants = true
 		card.ZIndex = 1001
@@ -293,7 +378,7 @@ function DrizxUI:CreateWindow(config)
 		cCorner.Parent = card
 
 		local cStroke = Instance.new("UIStroke")
-		cStroke.Color = Color3.fromRGB(45, 55, 72)
+		cStroke.Color = Theme.Stroke
 		cStroke.Thickness = 1
 		cStroke.Parent = card
 
@@ -302,7 +387,7 @@ function DrizxUI:CreateWindow(config)
 		iconImg.Position = UDim2.new(0, 10, 0, 10)
 		iconImg.BackgroundTransparency = 1
 		iconImg.Image = icon
-		iconImg.ImageColor3 = Color3.fromRGB(0, 162, 255)
+		iconImg.ImageColor3 = Theme.Accent
 		iconImg.ZIndex = 1002
 		iconImg.Parent = card
 
@@ -311,7 +396,7 @@ function DrizxUI:CreateWindow(config)
 		titleLbl.Position = UDim2.new(0, 34, 0, 8)
 		titleLbl.BackgroundTransparency = 1
 		titleLbl.Text = title
-		titleLbl.TextColor3 = Color3.fromRGB(245, 247, 250)
+		titleLbl.TextColor3 = Theme.Text
 		titleLbl.TextSize = 11
 		titleLbl.Font = Enum.Font.GothamBold
 		titleLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -324,7 +409,7 @@ function DrizxUI:CreateWindow(config)
 		contentLbl.Position = UDim2.new(0, 34, 0, 24)
 		contentLbl.BackgroundTransparency = 1
 		contentLbl.Text = content
-		contentLbl.TextColor3 = Color3.fromRGB(160, 175, 195)
+		contentLbl.TextColor3 = Theme.SubText
 		contentLbl.TextSize = 10
 		contentLbl.Font = Enum.Font.GothamMedium
 		contentLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -337,12 +422,12 @@ function DrizxUI:CreateWindow(config)
 		local pBar = Instance.new("Frame")
 		pBar.Size = UDim2.new(1, 0, 0, 2)
 		pBar.Position = UDim2.new(0, 0, 1, -2)
-		pBar.BackgroundColor3 = Color3.fromRGB(0, 162, 255)
+		pBar.BackgroundColor3 = Theme.Accent
 		pBar.BorderSizePixel = 0
 		pBar.ZIndex = 1003
 		pBar.Parent = card
 
-		-- Rantai tween: progress -> fade -> hapus. Tidak ada thread yang menunggu.
+		-- Tween chain: progress -> fade -> remove. No threads are left waiting.
 		playTween(pBar, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 0, 2)}, function(state)
 			if state ~= Enum.PlaybackState.Completed then return end
 			local fadeInfo = TweenInfo.new(0.2)
@@ -365,9 +450,10 @@ function DrizxUI:CreateWindow(config)
 	toggleBtn.Size = UDim2.new(0, TOGGLE_SIZE, 0, TOGGLE_SIZE)
 	toggleBtn.Position = UDim2.fromOffset(15, math.floor(initialVp.Y / 2 - TOGGLE_SIZE / 2))
 	toggleBtn.Image = logoAsset
+	toggleBtn.ImageColor3 = Theme.Text
 	toggleBtn.AutoButtonColor = false
 	toggleBtn.BackgroundTransparency = 0.15
-	toggleBtn.BackgroundColor3 = Color3.fromRGB(18, 22, 31)
+	toggleBtn.BackgroundColor3 = Theme.Surface
 	toggleBtn.Active = true
 	toggleBtn.ZIndex = 200
 	toggleBtn.Parent = screenGui
@@ -377,7 +463,7 @@ function DrizxUI:CreateWindow(config)
 	toggleCorner.Parent = toggleBtn
 
 	local toggleStroke = Instance.new("UIStroke")
-	toggleStroke.Color = Color3.fromRGB(0, 162, 255)
+	toggleStroke.Color = Theme.Accent
 	toggleStroke.Thickness = 1.2
 	toggleStroke.Parent = toggleBtn
 
@@ -429,7 +515,7 @@ function DrizxUI:CreateWindow(config)
 
 	local mainStroke = Instance.new("UIStroke")
 	mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	mainStroke.Color = Color3.fromRGB(45, 55, 72)
+	mainStroke.Color = Theme.Stroke
 	mainStroke.Thickness = 1.2
 	mainStroke.Parent = mainFrame
 
@@ -443,11 +529,11 @@ function DrizxUI:CreateWindow(config)
 		bgImg.Parent = mainFrame
 	end
 
-	-- TopBar Header (drag jendela)
+	-- TopBar header (window drag handle)
 	local topBar = Instance.new("Frame")
 	topBar.Name = "TopBar"
 	topBar.Size = UDim2.new(1, 0, 0, TOPBAR_H)
-	topBar.BackgroundColor3 = Color3.fromRGB(18, 22, 31)
+	topBar.BackgroundColor3 = Theme.Surface
 	topBar.BorderSizePixel = 0
 	topBar.ZIndex = 2
 	topBar.Parent = mainFrame
@@ -459,7 +545,7 @@ function DrizxUI:CreateWindow(config)
 	local windowDragStart = Vector2.zero
 	local windowStartPos = Vector2.zero
 
-	-- Area drag hanya di sisi kiri header, supaya tombol minimize/close tidak ikut memicu drag.
+	-- The drag area covers only the left side of the header, so the minimize/close buttons don't trigger a drag.
 	local dragHandle = Instance.new("Frame")
 	dragHandle.Name = "DragHandle"
 	dragHandle.Size = UDim2.new(1, -62, 1, 0)
@@ -485,6 +571,7 @@ function DrizxUI:CreateWindow(config)
 	headerIcon.Position = UDim2.new(0, 10, 0.5, -9)
 	headerIcon.BackgroundTransparency = 1
 	headerIcon.Image = logoAsset
+	headerIcon.ImageColor3 = Theme.Text
 	headerIcon.ZIndex = 3
 	headerIcon.Parent = topBar
 
@@ -494,7 +581,7 @@ function DrizxUI:CreateWindow(config)
 	headerTitle.BackgroundTransparency = 1
 	headerTitle.RichText = true
 	headerTitle.Text = escapeRichText(titleText) .. " <font color=\"#708090\">| " .. escapeRichText(subTitle) .. "</font>"
-	headerTitle.TextColor3 = Color3.fromRGB(245, 247, 250)
+	headerTitle.TextColor3 = Theme.Text
 	headerTitle.TextSize = 10
 	headerTitle.Font = Enum.Font.GothamBold
 	headerTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -502,39 +589,69 @@ function DrizxUI:CreateWindow(config)
 	headerTitle.ZIndex = 3
 	headerTitle.Parent = topBar
 
-	local minimizeBtn = Instance.new("TextButton")
-	minimizeBtn.Size = UDim2.new(0, 22, 0, 22)
-	minimizeBtn.Position = UDim2.new(1, -54, 0.5, -11)
-	minimizeBtn.BackgroundColor3 = Color3.fromRGB(28, 34, 46)
-	minimizeBtn.BackgroundTransparency = 0.4
-	minimizeBtn.Text = "─"
-	minimizeBtn.TextColor3 = Color3.fromRGB(160, 175, 195)
-	minimizeBtn.TextSize = 10
-	minimizeBtn.Font = Enum.Font.GothamBold
-	minimizeBtn.ZIndex = 3
-	minimizeBtn.Parent = topBar
+	-- Button icons are drawn from Frames (not the "─" / "✕" characters), because those glyphs
+	-- often fail to render in the Gotham font, leaving the buttons looking empty/missing.
+	local function makeHeaderButton(offsetX)
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(0, 22, 0, 22)
+		btn.Position = UDim2.new(1, offsetX, 0.5, -11)
+		btn.BackgroundColor3 = Theme.Raised
+		btn.BackgroundTransparency = 0.4
+		btn.Text = ""
+		btn.AutoButtonColor = false
+		btn.ZIndex = 3
+		btn.Parent = topBar
 
-	local minCorner = Instance.new("UICorner")
-	minCorner.CornerRadius = UDim.new(0, 4)
-	minCorner.Parent = minimizeBtn
+		local btnCorner = Instance.new("UICorner")
+		btnCorner.CornerRadius = UDim.new(0, 4)
+		btnCorner.Parent = btn
+		return btn
+	end
 
-	local closeBtn = Instance.new("TextButton")
-	closeBtn.Size = UDim2.new(0, 22, 0, 22)
-	closeBtn.Position = UDim2.new(1, -28, 0.5, -11)
-	closeBtn.BackgroundColor3 = Color3.fromRGB(28, 34, 46)
-	closeBtn.BackgroundTransparency = 0.4
-	closeBtn.Text = "✕"
-	closeBtn.TextColor3 = Color3.fromRGB(160, 175, 195)
-	closeBtn.TextSize = 10
-	closeBtn.Font = Enum.Font.GothamBold
-	closeBtn.ZIndex = 3
-	closeBtn.Parent = topBar
+	local function makeIconBar(parent, width, rotation)
+		local bar = Instance.new("Frame")
+		bar.AnchorPoint = Vector2.new(0.5, 0.5)
+		bar.Position = UDim2.fromScale(0.5, 0.5)
+		bar.Size = UDim2.fromOffset(width, 2)
+		bar.Rotation = rotation
+		bar.BackgroundColor3 = Theme.SubText
+		bar.BorderSizePixel = 0
+		bar.ZIndex = 4
+		bar.Parent = parent
 
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(0, 4)
-	closeCorner.Parent = closeBtn
+		local barCorner = Instance.new("UICorner")
+		barCorner.CornerRadius = UDim.new(1, 0)
+		barCorner.Parent = bar
+		return bar
+	end
 
-	-- Sidebar & Content Layout (ukuran diatur oleh applyLayout)
+	-- Hover/press effect: the button changes color and the icon turns white.
+	local function hookHeaderHover(btn, bars, hoverColor)
+		local info = TweenInfo.new(0.15)
+		local function setHover(on)
+			if Window.IsDestroyed then return end
+			playTween(btn, info, {
+				BackgroundColor3 = on and hoverColor or Theme.Raised,
+				BackgroundTransparency = on and 0.1 or 0.4,
+			})
+			for _, bar in ipairs(bars) do
+				playTween(bar, info, {BackgroundColor3 = on and Color3.new(1, 1, 1) or Theme.SubText})
+			end
+		end
+		table.insert(Window.Connections, btn.MouseEnter:Connect(function() setHover(true) end))
+		table.insert(Window.Connections, btn.MouseLeave:Connect(function() setHover(false) end))
+	end
+
+	local minimizeBtn = makeHeaderButton(-54)
+	local minBar = makeIconBar(minimizeBtn, 10, 0)
+	hookHeaderHover(minimizeBtn, {minBar}, Theme.Accent)
+
+	local closeBtn = makeHeaderButton(-28)
+	local closeBarA = makeIconBar(closeBtn, 12, 45)
+	local closeBarB = makeIconBar(closeBtn, 12, -45)
+	hookHeaderHover(closeBtn, {closeBarA, closeBarB}, Theme.Danger)
+
+	-- Sidebar & Content Layout (sizes handled by applyLayout)
 	local sidebar = Instance.new("Frame")
 	sidebar.Name = "Sidebar"
 	sidebar.Size = UDim2.new(0, sidebarWidth, 1, -46)
@@ -565,7 +682,7 @@ function DrizxUI:CreateWindow(config)
 	contentArea.Name = "ContentArea"
 	contentArea.Size = UDim2.new(1, -(sidebarWidth + 18), 1, -50)
 	contentArea.Position = UDim2.new(0, sidebarWidth + 12, 0, TOPBAR_H + 4)
-	contentArea.BackgroundColor3 = Color3.fromRGB(18, 22, 31)
+	contentArea.BackgroundColor3 = Theme.Surface
 	contentArea.BackgroundTransparency = (bgType == "Image" and 0.25 or 0)
 	contentArea.BorderSizePixel = 0
 	contentArea.ClipsDescendants = true
@@ -577,11 +694,11 @@ function DrizxUI:CreateWindow(config)
 	contentCorner.Parent = contentArea
 
 	local contentStroke = Instance.new("UIStroke")
-	contentStroke.Color = Color3.fromRGB(45, 55, 72)
+	contentStroke.Color = Theme.Stroke
 	contentStroke.Thickness = 1
 	contentStroke.Parent = contentArea
 
-	-- Layout responsif: dipanggil saat viewport berubah & setelah animasi selesai
+	-- Responsive layout: called when the viewport changes & after animations finish
 	applyLayout = function()
 		if Window.IsDestroyed then return end
 		local vp = getViewport()
@@ -676,15 +793,61 @@ function DrizxUI:CreateWindow(config)
 		end
 	end
 
-	table.insert(Window.Connections, closeBtn.MouseButton1Click:Connect(toggleWindow))
+	function Window:Toggle()
+		toggleWindow()
+	end
+
+	-- Register a cleanup function that runs when the window is destroyed
+	-- (e.g. to disconnect connections owned by your own script).
+	function Window:OnDestroy(callback)
+		if type(callback) == "function" then
+			table.insert(Window.DestroyCallbacks, callback)
+		end
+	end
+
+	-- X button: fully removes the UI (window shrinks, floating button fades out, then Destroy).
+	local closeDestroys = config.CloseAction ~= "Hide"
+	local isClosing = false
+
+	local function closeWindow()
+		if Window.IsDestroyed or isClosing then return end
+		isClosing = true
+		Window.IsAnimating = true
+		cancelAllDrags()
+
+		local fadeInfo = TweenInfo.new(0.2)
+		playTween(toggleBtn, fadeInfo, {BackgroundTransparency = 1, ImageTransparency = 1})
+		playTween(toggleStroke, fadeInfo, {Transparency = 1})
+
+		if mainFrame.Visible then
+			playTween(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In),
+				{Size = UDim2.new(0, mainFrame.AbsoluteSize.X, 0, 0)}, function()
+					Window:Destroy()
+				end)
+		else
+			Window:Destroy()
+		end
+	end
+
+	function Window:Close()
+		closeWindow()
+	end
+
+	table.insert(Window.Connections, closeBtn.MouseButton1Click:Connect(function()
+		if closeDestroys then
+			closeWindow()
+		else
+			toggleWindow()
+		end
+	end))
 	table.insert(Window.Connections, minimizeBtn.MouseButton1Click:Connect(toggleMinimize))
 
 	-- Tab Engine
-	function Window:CreateTab(tabConfig)
+	function Window:CreateTab(tabConfig, iconArg)
 		tabConfig = typeof(tabConfig) == "table" and tabConfig or { Name = tostring(tabConfig) }
 		local tabNameKey = tabConfig.Name or "Tab"
 		local tabNameDisplay = tostring(tabNameKey)
-		local tabIcon = parseIcon(tabConfig.Icon or "Code")
+		local tabIcon = parseIcon(tabConfig.Icon or iconArg or "Code")
 
 		if Window.Tabs[tabNameKey] then
 			return Window.Tabs[tabNameKey]
@@ -694,7 +857,7 @@ function DrizxUI:CreateWindow(config)
 
 		local tabBtn = Instance.new("TextButton")
 		tabBtn.Size = UDim2.new(1, -2, 0, 30)
-		tabBtn.BackgroundColor3 = Color3.fromRGB(18, 22, 31)
+		tabBtn.BackgroundColor3 = Theme.Surface
 		tabBtn.BackgroundTransparency = 0.5
 		tabBtn.BorderSizePixel = 0
 		tabBtn.Text = ""
@@ -710,7 +873,7 @@ function DrizxUI:CreateWindow(config)
 		iconImg.Position = UDim2.new(0, 8, 0.5, -7)
 		iconImg.BackgroundTransparency = 1
 		iconImg.Image = tabIcon
-		iconImg.ImageColor3 = Color3.fromRGB(160, 175, 195)
+		iconImg.ImageColor3 = Theme.SubText
 		iconImg.ZIndex = 4
 		iconImg.Parent = tabBtn
 
@@ -719,7 +882,7 @@ function DrizxUI:CreateWindow(config)
 		labelTxt.Position = UDim2.new(0, 26, 0, 0)
 		labelTxt.BackgroundTransparency = 1
 		labelTxt.Text = tabNameDisplay
-		labelTxt.TextColor3 = Color3.fromRGB(160, 175, 195)
+		labelTxt.TextColor3 = Theme.SubText
 		labelTxt.TextSize = 10
 		labelTxt.Font = Enum.Font.GothamMedium
 		labelTxt.TextXAlignment = Enum.TextXAlignment.Left
@@ -747,8 +910,8 @@ function DrizxUI:CreateWindow(config)
 			tabScroll.CanvasSize = UDim2.new(0, 0, 0, tabLayout.AbsoluteContentSize.Y + 8)
 		end))
 
-		-- Kunci scroll per tab: nilai asli ScrollingEnabled disimpan saat kunci pertama dipasang
-		-- dan dipulihkan saat kunci terakhir dilepas.
+		-- Per-tab scroll lock: the original ScrollingEnabled value is saved when the first lock is taken
+		-- and restored when the last lock is released.
 		local scrollLocks = 0
 		local scrollOriginal = true
 
@@ -778,18 +941,18 @@ function DrizxUI:CreateWindow(config)
 				if btn:IsA("TextButton") then
 					playTween(btn, TweenInfo.new(0.2), {BackgroundTransparency = 0.5})
 					local lbl = btn:FindFirstChildOfClass("TextLabel")
-					if lbl then lbl.TextColor3 = Color3.fromRGB(160, 175, 195) end
+					if lbl then lbl.TextColor3 = Theme.SubText end
 					local img = btn:FindFirstChildOfClass("ImageLabel")
-					if img then img.ImageColor3 = Color3.fromRGB(160, 175, 195) end
+					if img then img.ImageColor3 = Theme.SubText end
 				end
 			end
 			tabScroll.Visible = true
 			playTween(tabBtn, TweenInfo.new(0.2), {
 				BackgroundTransparency = 0,
-				BackgroundColor3 = Color3.fromRGB(28, 34, 46)
+				BackgroundColor3 = Theme.Raised
 			})
-			labelTxt.TextColor3 = Color3.fromRGB(245, 247, 250)
-			iconImg.ImageColor3 = Color3.fromRGB(0, 162, 255)
+			labelTxt.TextColor3 = Theme.Text
+			iconImg.ImageColor3 = Theme.Accent
 			Window.CurrentTab = Tab
 		end
 
@@ -805,11 +968,12 @@ function DrizxUI:CreateWindow(config)
 
 		-- Components
 		function Tab:CreateSection(text)
+			if type(text) == "table" then text = text.Name or text.Title or "" end
 			local secLabel = Instance.new("TextLabel")
 			secLabel.Size = UDim2.new(1, 0, 0, 18)
 			secLabel.BackgroundTransparency = 1
 			secLabel.Text = string.upper(tostring(text))
-			secLabel.TextColor3 = Color3.fromRGB(110, 125, 145)
+			secLabel.TextColor3 = Theme.Muted
 			secLabel.TextSize = 9
 			secLabel.Font = Enum.Font.GothamBold
 			secLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -818,10 +982,15 @@ function DrizxUI:CreateWindow(config)
 		end
 
 		function Tab:CreateParagraph(title, desc)
+			if type(title) == "table" then
+				local opts = title
+				title = opts.Title or opts.Name or ""
+				desc = opts.Content or opts.Description or ""
+			end
 			local pFrame = Instance.new("Frame")
 			pFrame.Size = UDim2.new(1, -4, 0, 0)
 			pFrame.AutomaticSize = Enum.AutomaticSize.Y
-			pFrame.BackgroundColor3 = Color3.fromRGB(13, 17, 23)
+			pFrame.BackgroundColor3 = Theme.Card
 			pFrame.BorderSizePixel = 0
 			pFrame.ZIndex = 4
 			pFrame.Parent = tabScroll
@@ -846,7 +1015,7 @@ function DrizxUI:CreateWindow(config)
 			pTitle.Size = UDim2.new(1, 0, 0, 16)
 			pTitle.BackgroundTransparency = 1
 			pTitle.Text = tostring(title)
-			pTitle.TextColor3 = Color3.fromRGB(245, 247, 250)
+			pTitle.TextColor3 = Theme.Text
 			pTitle.TextSize = 10
 			pTitle.Font = Enum.Font.GothamBold
 			pTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -858,7 +1027,7 @@ function DrizxUI:CreateWindow(config)
 			descLbl.AutomaticSize = Enum.AutomaticSize.Y
 			descLbl.BackgroundTransparency = 1
 			descLbl.Text = tostring(desc)
-			descLbl.TextColor3 = Color3.fromRGB(160, 175, 195)
+			descLbl.TextColor3 = Theme.SubText
 			descLbl.TextSize = 9
 			descLbl.Font = Enum.Font.GothamMedium
 			descLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -869,9 +1038,14 @@ function DrizxUI:CreateWindow(config)
 		end
 
 		function Tab:CreateButton(btnText, callback)
+			if type(btnText) == "table" then
+				local opts = btnText
+				btnText = opts.Name or opts.Title or "Button"
+				callback = opts.Callback
+			end
 			callback = callback or function() end
-			local baseColor = Color3.fromRGB(13, 17, 23)
-			local pressColor = Color3.fromRGB(0, 162, 255)
+			local baseColor = Theme.Card
+			local pressColor = Theme.Accent
 
 			local btnFrame = Instance.new("Frame")
 			btnFrame.Size = UDim2.new(1, -4, 0, 32)
@@ -888,7 +1062,7 @@ function DrizxUI:CreateWindow(config)
 			trigger.Size = UDim2.new(1, 0, 1, 0)
 			trigger.BackgroundTransparency = 1
 			trigger.Text = "  " .. tostring(btnText)
-			trigger.TextColor3 = Color3.fromRGB(245, 247, 250)
+			trigger.TextColor3 = Theme.Text
 			trigger.TextSize = 10
 			trigger.Font = Enum.Font.GothamMedium
 			trigger.TextXAlignment = Enum.TextXAlignment.Left
@@ -906,14 +1080,20 @@ function DrizxUI:CreateWindow(config)
 		end
 
 		function Tab:CreateToggle(toggleText, defaultState, callback)
+			if type(toggleText) == "table" then
+				local opts = toggleText
+				toggleText = opts.Name or opts.Title or "Toggle"
+				defaultState = opts.Default
+				callback = opts.Callback
+			end
 			callback = callback or function() end
 			local state = (typeof(defaultState) == "boolean" and defaultState) or false
-			local onColor = Color3.fromRGB(46, 160, 67)
-			local offColor = Color3.fromRGB(28, 34, 46)
+			local onColor = Theme.Success
+			local offColor = Theme.Raised
 
 			local tFrame = Instance.new("Frame")
 			tFrame.Size = UDim2.new(1, -4, 0, 32)
-			tFrame.BackgroundColor3 = Color3.fromRGB(13, 17, 23)
+			tFrame.BackgroundColor3 = Theme.Card
 			tFrame.BorderSizePixel = 0
 			tFrame.ZIndex = 4
 			tFrame.Parent = tabScroll
@@ -927,7 +1107,7 @@ function DrizxUI:CreateWindow(config)
 			label.Position = UDim2.new(0, 10, 0, 0)
 			label.BackgroundTransparency = 1
 			label.Text = tostring(toggleText)
-			label.TextColor3 = Color3.fromRGB(245, 247, 250)
+			label.TextColor3 = Theme.Text
 			label.TextSize = 10
 			label.Font = Enum.Font.GothamMedium
 			label.TextXAlignment = Enum.TextXAlignment.Left
@@ -993,18 +1173,45 @@ function DrizxUI:CreateWindow(config)
 		end
 
 		function Tab:CreateSlider(sliderText, minVal, maxVal, defaultVal, callback)
+			local increment = nil
+			if type(sliderText) == "table" then
+				local opts = sliderText
+				sliderText = opts.Name or opts.Title or "Slider"
+				minVal = opts.Min
+				maxVal = opts.Max
+				defaultVal = opts.Default
+				increment = tonumber(opts.Increment)
+				callback = opts.Callback
+			end
 			callback = callback or function() end
 			minVal = tonumber(minVal) or 0
 			maxVal = tonumber(maxVal) or 100
 			if maxVal <= minVal then maxVal = minVal + 1 end
 
-			local value = math.clamp(tonumber(defaultVal) or minVal, minVal, maxVal)
+			-- Increment: defaults to 1 for integer ranges, continuous (1 decimal) otherwise.
+			if not increment or increment <= 0 then
+				increment = (minVal % 1 == 0 and maxVal % 1 == 0) and 1 or 0
+			end
+			local decimals = 0
+			if increment == 0 then
+				decimals = 1
+			elseif increment < 1 then
+				decimals = math.clamp(math.ceil(-math.log10(increment) - 1e-9), 1, 4)
+			end
+			local function snap(v)
+				if increment > 0 then
+					v = minVal + math.floor((v - minVal) / increment + 0.5) * increment
+				end
+				return math.clamp(v, minVal, maxVal)
+			end
+
+			local value = snap(math.clamp(tonumber(defaultVal) or minVal, minVal, maxVal))
 
 			local sFrame = Instance.new("Frame")
 			sFrame.Size = UDim2.new(1, -4, 0, 44)
-			sFrame.BackgroundColor3 = Color3.fromRGB(13, 17, 23)
+			sFrame.BackgroundColor3 = Theme.Card
 			sFrame.BorderSizePixel = 0
-			sFrame.Active = true -- sink input supaya ScrollingFrame tidak ikut menggulung saat slider digeser
+			sFrame.Active = true -- sink input so the ScrollingFrame doesn't scroll while the slider is being dragged
 			sFrame.ZIndex = 4
 			sFrame.Parent = tabScroll
 
@@ -1017,7 +1224,7 @@ function DrizxUI:CreateWindow(config)
 			label.Position = UDim2.new(0, 10, 0, 4)
 			label.BackgroundTransparency = 1
 			label.Text = tostring(sliderText)
-			label.TextColor3 = Color3.fromRGB(245, 247, 250)
+			label.TextColor3 = Theme.Text
 			label.TextSize = 10
 			label.Font = Enum.Font.GothamMedium
 			label.TextXAlignment = Enum.TextXAlignment.Left
@@ -1029,8 +1236,8 @@ function DrizxUI:CreateWindow(config)
 			valLabel.Size = UDim2.new(0, 40, 0, 18)
 			valLabel.Position = UDim2.new(1, -48, 0, 4)
 			valLabel.BackgroundTransparency = 1
-			valLabel.Text = string.format("%.1f", value)
-			valLabel.TextColor3 = Color3.fromRGB(160, 175, 195)
+			valLabel.Text = string.format("%." .. tostring(decimals) .. "f", value)
+			valLabel.TextColor3 = Theme.SubText
 			valLabel.TextSize = 10
 			valLabel.Font = Enum.Font.GothamBold
 			valLabel.TextXAlignment = Enum.TextXAlignment.Right
@@ -1040,7 +1247,7 @@ function DrizxUI:CreateWindow(config)
 			local track = Instance.new("Frame")
 			track.Size = UDim2.new(1, -20, 0, 5)
 			track.Position = UDim2.new(0, 10, 0, 28)
-			track.BackgroundColor3 = Color3.fromRGB(28, 34, 46)
+			track.BackgroundColor3 = Theme.Raised
 			track.BorderSizePixel = 0
 			track.ZIndex = 5
 			track.Parent = sFrame
@@ -1051,7 +1258,7 @@ function DrizxUI:CreateWindow(config)
 
 			local fill = Instance.new("Frame")
 			fill.Size = UDim2.new((value - minVal) / (maxVal - minVal), 0, 1, 0)
-			fill.BackgroundColor3 = Color3.fromRGB(0, 162, 255)
+			fill.BackgroundColor3 = Theme.Accent
 			fill.BorderSizePixel = 0
 			fill.ZIndex = 6
 			fill.Parent = track
@@ -1064,12 +1271,14 @@ function DrizxUI:CreateWindow(config)
 				if Window.IsDestroyed then return end
 				local num = tonumber(newValue)
 				if not num then return end
-				value = math.clamp(num, minVal, maxVal)
+				local snapped = snap(num)
+				local changed = snapped ~= value
+				value = snapped
 				local pos = (value - minVal) / (maxVal - minVal)
-				valLabel.Text = string.format("%.1f", value)
+				valLabel.Text = string.format("%." .. tostring(decimals) .. "f", value)
 				fill.Size = UDim2.new(pos, 0, 1, 0)
 				if fireCallback then
-					safeCall("Slider", callback, value)
+					if changed then safeCall("Slider", callback, value) end
 				end
 			end
 
@@ -1080,7 +1289,7 @@ function DrizxUI:CreateWindow(config)
 				applySliderValue(minVal + (maxVal - minVal) * pos, true)
 			end
 
-			-- Seluruh kartu jadi area sentuh (track setebal 5px terlalu sulit ditekan di HP)
+			-- The whole card is a touch target (a 5px track is too hard to press on mobile)
 			local dragConns = bindDrag(sFrame,
 				function(input)
 					lockScroll()
@@ -1102,6 +1311,267 @@ function DrizxUI:CreateWindow(config)
 				GetValue = function(_) return value end
 			}
 		end
+
+		function Tab:CreateDropdown(dropConfig)
+			dropConfig = type(dropConfig) == "table" and dropConfig or {}
+			local callback = dropConfig.Callback or function() end
+
+			local HEADER_H = 32
+			local OPTION_H = 26
+			local OPTION_GAP = 2
+			local MAX_LIST_H = 130
+
+			local options = {}
+			local selected = nil
+			local isOpenDrop = false
+			local optionButtons = {}
+			local optionConns = {}
+
+			local dFrame = Instance.new("Frame")
+			dFrame.Size = UDim2.new(1, -4, 0, HEADER_H)
+			dFrame.BackgroundColor3 = Theme.Card
+			dFrame.BorderSizePixel = 0
+			dFrame.ClipsDescendants = true
+			dFrame.ZIndex = 4
+			dFrame.Parent = tabScroll
+
+			local dCorner = Instance.new("UICorner")
+			dCorner.CornerRadius = UDim.new(0, 6)
+			dCorner.Parent = dFrame
+
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.new(1, -134, 0, HEADER_H)
+			label.Position = UDim2.new(0, 10, 0, 0)
+			label.BackgroundTransparency = 1
+			label.Text = tostring(dropConfig.Name or "Dropdown")
+			label.TextColor3 = Theme.Text
+			label.TextSize = 10
+			label.Font = Enum.Font.GothamMedium
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextTruncate = Enum.TextTruncate.AtEnd
+			label.ZIndex = 5
+			label.Parent = dFrame
+
+			local valueLbl = Instance.new("TextLabel")
+			valueLbl.Size = UDim2.new(0, 95, 0, HEADER_H)
+			valueLbl.Position = UDim2.new(1, -122, 0, 0)
+			valueLbl.BackgroundTransparency = 1
+			valueLbl.Text = "Select..."
+			valueLbl.TextColor3 = Theme.SubText
+			valueLbl.TextSize = 10
+			valueLbl.Font = Enum.Font.GothamMedium
+			valueLbl.TextXAlignment = Enum.TextXAlignment.Right
+			valueLbl.TextTruncate = Enum.TextTruncate.AtEnd
+			valueLbl.ZIndex = 5
+			valueLbl.Parent = dFrame
+
+			local arrow = Instance.new("TextLabel")
+			arrow.Size = UDim2.new(0, 16, 0, HEADER_H)
+			arrow.Position = UDim2.new(1, -24, 0, 0)
+			arrow.BackgroundTransparency = 1
+			arrow.Text = "▾"
+			arrow.TextColor3 = Theme.SubText
+			arrow.TextSize = 12
+			arrow.Font = Enum.Font.GothamBold
+			arrow.ZIndex = 5
+			arrow.Parent = dFrame
+
+			local list = Instance.new("ScrollingFrame")
+			list.Size = UDim2.new(1, -12, 0, 0)
+			list.Position = UDim2.new(0, 6, 0, HEADER_H + 2)
+			list.BackgroundTransparency = 1
+			list.BorderSizePixel = 0
+			list.ScrollBarThickness = 2
+			list.CanvasSize = UDim2.new(0, 0, 0, 0)
+			list.ZIndex = 5
+			list.Parent = dFrame
+
+			local listLayout = Instance.new("UIListLayout")
+			listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+			listLayout.Padding = UDim.new(0, OPTION_GAP)
+			listLayout.Parent = list
+
+			local header = Instance.new("TextButton")
+			header.Size = UDim2.new(1, 0, 0, HEADER_H)
+			header.BackgroundTransparency = 1
+			header.Text = ""
+			header.ZIndex = 8
+			header.Parent = dFrame
+
+			local function applySize()
+				local listH = isOpenDrop and math.min(#options * (OPTION_H + OPTION_GAP), MAX_LIST_H) or 0
+				local frameH = isOpenDrop and (HEADER_H + 6 + listH) or HEADER_H
+				local info = TweenInfo.new(0.2, Enum.EasingStyle.Quad)
+				playTween(dFrame, info, {Size = UDim2.new(1, -4, 0, frameH)})
+				playTween(list, info, {Size = UDim2.new(1, -12, 0, listH)})
+				playTween(arrow, info, {Rotation = isOpenDrop and 180 or 0})
+			end
+
+			local function highlight()
+				for opt, btn in pairs(optionButtons) do
+					btn.TextColor3 = (opt == selected) and Theme.Accent or Theme.Text
+				end
+			end
+
+			local function setSelected(opt, fireCallback)
+				selected = opt
+				valueLbl.Text = opt or "Select..."
+				highlight()
+				if fireCallback and opt ~= nil then
+					safeCall("Dropdown", callback, opt)
+				end
+			end
+
+			local function setOptions(newOptions)
+				options = {}
+				local seen = {}
+				for _, opt in ipairs(newOptions or {}) do
+					local text = tostring(opt)
+					if not seen[text] then
+						seen[text] = true
+						table.insert(options, text)
+					end
+				end
+			end
+
+			local function buildOptions()
+				for _, conn in ipairs(optionConns) do
+					conn:Disconnect()
+				end
+				optionConns = {}
+				for _, btn in pairs(optionButtons) do
+					btn:Destroy()
+				end
+				optionButtons = {}
+
+				for i, opt in ipairs(options) do
+					local btn = Instance.new("TextButton")
+					btn.Size = UDim2.new(1, -4, 0, OPTION_H)
+					btn.BackgroundColor3 = Theme.Surface
+					btn.BorderSizePixel = 0
+					btn.AutoButtonColor = false
+					btn.Text = "  " .. opt
+					btn.TextSize = 10
+					btn.Font = Enum.Font.GothamMedium
+					btn.TextXAlignment = Enum.TextXAlignment.Left
+					btn.TextTruncate = Enum.TextTruncate.AtEnd
+					btn.LayoutOrder = i
+					btn.ZIndex = 6
+					btn.Parent = list
+
+					local bCorner = Instance.new("UICorner")
+					bCorner.CornerRadius = UDim.new(0, 5)
+					bCorner.Parent = btn
+
+					optionButtons[opt] = btn
+					table.insert(optionConns, btn.MouseButton1Click:Connect(function()
+						setSelected(opt, true)
+						isOpenDrop = false
+						applySize()
+					end))
+				end
+
+				list.CanvasSize = UDim2.new(0, 0, 0, #options * (OPTION_H + OPTION_GAP))
+				highlight()
+			end
+
+			table.insert(Tab.Connections, header.MouseButton1Click:Connect(function()
+				if Window.IsDestroyed then return end
+				isOpenDrop = not isOpenDrop
+				applySize()
+			end))
+
+			setOptions(dropConfig.Options)
+			buildOptions()
+			if dropConfig.Default ~= nil and table.find(options, tostring(dropConfig.Default)) then
+				setSelected(tostring(dropConfig.Default), false)
+			end
+
+			return {
+				Set = function(_, option)
+					local text = tostring(option)
+					if table.find(options, text) then
+						setSelected(text, false)
+					end
+				end,
+				Get = function(_) return selected end,
+				Refresh = function(_, newOptions)
+					setOptions(newOptions)
+					buildOptions()
+					if selected and not table.find(options, selected) then
+						setSelected(nil, false)
+					end
+					if isOpenDrop then applySize() end
+				end
+			}
+		end
+
+		function Tab:CreateTextbox(boxConfig)
+			boxConfig = type(boxConfig) == "table" and boxConfig or {}
+			local callback = boxConfig.Callback or function() end
+
+			local bFrame = Instance.new("Frame")
+			bFrame.Size = UDim2.new(1, -4, 0, 32)
+			bFrame.BackgroundColor3 = Theme.Card
+			bFrame.BorderSizePixel = 0
+			bFrame.ZIndex = 4
+			bFrame.Parent = tabScroll
+
+			local bCorner = Instance.new("UICorner")
+			bCorner.CornerRadius = UDim.new(0, 6)
+			bCorner.Parent = bFrame
+
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.new(0.5, -14, 1, 0)
+			label.Position = UDim2.new(0, 10, 0, 0)
+			label.BackgroundTransparency = 1
+			label.Text = tostring(boxConfig.Name or "Textbox")
+			label.TextColor3 = Theme.Text
+			label.TextSize = 10
+			label.Font = Enum.Font.GothamMedium
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextTruncate = Enum.TextTruncate.AtEnd
+			label.ZIndex = 5
+			label.Parent = bFrame
+
+			local input = Instance.new("TextBox")
+			input.Size = UDim2.new(0.5, -14, 0, 22)
+			input.Position = UDim2.new(0.5, 4, 0.5, -11)
+			input.BackgroundColor3 = Theme.Surface
+			input.BorderSizePixel = 0
+			input.ClearTextOnFocus = boxConfig.ClearOnFocus == true
+			input.ClipsDescendants = true
+			input.PlaceholderText = tostring(boxConfig.Placeholder or "")
+			input.PlaceholderColor3 = Theme.Muted
+			input.Text = tostring(boxConfig.Default or "")
+			input.TextColor3 = Theme.Text
+			input.TextSize = 10
+			input.Font = Enum.Font.GothamMedium
+			input.TextXAlignment = Enum.TextXAlignment.Left
+			input.ZIndex = 5
+			input.Parent = bFrame
+
+			local iCorner = Instance.new("UICorner")
+			iCorner.CornerRadius = UDim.new(0, 4)
+			iCorner.Parent = input
+
+			local iPad = Instance.new("UIPadding")
+			iPad.PaddingLeft = UDim.new(0, 6)
+			iPad.PaddingRight = UDim.new(0, 6)
+			iPad.Parent = input
+
+			-- The callback fires when focus is lost (Enter, tapping outside the box, or the done button on mobile).
+			table.insert(Tab.Connections, input.FocusLost:Connect(function(enterPressed)
+				if Window.IsDestroyed then return end
+				safeCall("Textbox", callback, input.Text, enterPressed)
+			end))
+
+			return {
+				Set = function(_, text) input.Text = tostring(text) end,
+				Get = function(_) return input.Text end
+			}
+		end
+
 
 		return Tab
 	end
@@ -1137,17 +1607,23 @@ function DrizxUI:CreateWindow(config)
 	function Window:Destroy()
 		if Window.IsDestroyed then return end
 		Window.IsDestroyed = true
+
+		local destroyCallbacks = Window.DestroyCallbacks
+		Window.DestroyCallbacks = {}
+		for _, cb in ipairs(destroyCallbacks) do
+			safeCall("OnDestroy", cb)
+		end
 		Window.IsAnimating = false
 		cancelAllDrags()
 
-		-- Batalkan semua tween aktif (callback-nya sudah dijaga IsDestroyed)
+		-- Cancel all active tweens (their callbacks are already guarded by IsDestroyed)
 		local tweens = Window.ActiveTweens
 		Window.ActiveTweens = {}
 		for _, tw in ipairs(tweens) do
 			pcall(function() tw:Cancel() end)
 		end
 
-		-- Hapus kartu notifikasi
+		-- Remove notification cards
 		local cards = Window.ActiveNotifications
 		Window.ActiveNotifications = {}
 		for _, card in ipairs(cards) do
@@ -1156,7 +1632,7 @@ function DrizxUI:CreateWindow(config)
 			end
 		end
 
-		-- Bersihkan semua tab
+		-- Clean up all tabs
 		local tabNames = {}
 		for tabName, _ in pairs(Window.Tabs) do
 			table.insert(tabNames, tabName)
@@ -1165,15 +1641,221 @@ function DrizxUI:CreateWindow(config)
 			Window:DestroyTab(tabName)
 		end
 
-		-- Putus semua koneksi window
+		-- Disconnect all window connections
 		for _, conn in ipairs(Window.Connections) do
 			pcall(function() conn:Disconnect() end)
 		end
 		Window.Connections = {}
 
+		local libIdx = table.find(DrizxUI.Windows, Window)
+		if libIdx then table.remove(DrizxUI.Windows, libIdx) end
+
 		if screenGui and not destroyedExternally then
 			screenGui:Destroy()
 		end
+	end
+
+	-- Loading animation: dimmed backdrop + a card with a spinning spinner, progress bar, and status text.
+	-- When done the card fades out, the floating button appears, then the window opens automatically.
+	local loadingDone = config.Loading == false
+	local loadingTween = nil
+	local spinTween = nil
+	local finishLoading = nil
+
+	if not loadingDone then
+		local loadTitle = tostring(config.LoadingTitle or titleText)
+		local loadDuration = math.max(0.3, tonumber(config.LoadingDuration) or 1.8)
+		local steps = {"Loading modules...", "Preparing UI...", "Almost done..."}
+		if type(config.LoadingSteps) == "table" and #config.LoadingSteps > 0 then
+			steps = config.LoadingSteps
+		end
+
+		toggleBtn.Visible = false
+
+		local backdrop = Instance.new("Frame")
+		backdrop.Name = "DrizxLoadingBackdrop"
+		backdrop.Size = UDim2.fromScale(1, 1)
+		backdrop.BackgroundColor3 = Color3.new(0, 0, 0)
+		backdrop.BackgroundTransparency = 1
+		backdrop.BorderSizePixel = 0
+		backdrop.Active = true
+		backdrop.ZIndex = 500
+		backdrop.Parent = screenGui
+
+		local cardW = math.clamp(getViewport().X - 40, 160, 220)
+		local cardH = 118
+
+		-- CanvasGroup so the whole card can fade in/out at once via GroupTransparency.
+		local loadCard = Instance.new("CanvasGroup")
+		loadCard.Name = "DrizxLoadingCard"
+		loadCard.AnchorPoint = Vector2.new(0.5, 0.5)
+		loadCard.Position = UDim2.fromScale(0.5, 0.5)
+		loadCard.Size = UDim2.fromOffset(math.floor(cardW * 0.9), math.floor(cardH * 0.9))
+		loadCard.BackgroundColor3 = Theme.Notification
+		loadCard.BorderSizePixel = 0
+		loadCard.GroupTransparency = 1
+		loadCard.ZIndex = 501
+		loadCard.Parent = screenGui
+
+		local loadCorner = Instance.new("UICorner")
+		loadCorner.CornerRadius = UDim.new(0, 12)
+		loadCorner.Parent = loadCard
+
+		local loadStroke = Instance.new("UIStroke")
+		loadStroke.Color = Theme.Stroke
+		loadStroke.Thickness = 1.2
+		loadStroke.Parent = loadCard
+
+		-- Spinner: dim ring + a spinning accent arc (UIGradient on a UIStroke)
+		local SPIN = 34
+		local ring = Instance.new("Frame")
+		ring.AnchorPoint = Vector2.new(0.5, 0)
+		ring.Position = UDim2.new(0.5, 0, 0, 14)
+		ring.Size = UDim2.fromOffset(SPIN, SPIN)
+		ring.BackgroundTransparency = 1
+		ring.Parent = loadCard
+
+		local ringCorner = Instance.new("UICorner")
+		ringCorner.CornerRadius = UDim.new(1, 0)
+		ringCorner.Parent = ring
+
+		local ringStroke = Instance.new("UIStroke")
+		ringStroke.Color = Theme.Stroke
+		ringStroke.Thickness = 3
+		ringStroke.Parent = ring
+
+		local arc = Instance.new("Frame")
+		arc.Size = UDim2.fromScale(1, 1)
+		arc.BackgroundTransparency = 1
+		arc.Parent = ring
+
+		local arcCorner = Instance.new("UICorner")
+		arcCorner.CornerRadius = UDim.new(1, 0)
+		arcCorner.Parent = arc
+
+		local arcStroke = Instance.new("UIStroke")
+		arcStroke.Color = Theme.Accent
+		arcStroke.Thickness = 3
+		arcStroke.Parent = arc
+
+		local arcGradient = Instance.new("UIGradient")
+		arcGradient.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(0.6, 1),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		arcGradient.Parent = arcStroke
+
+		local loadLogo = Instance.new("ImageLabel")
+		loadLogo.AnchorPoint = Vector2.new(0.5, 0.5)
+		loadLogo.Position = UDim2.fromScale(0.5, 0.5)
+		loadLogo.Size = UDim2.fromOffset(14, 14)
+		loadLogo.BackgroundTransparency = 1
+		loadLogo.Image = logoAsset
+		loadLogo.ImageColor3 = Theme.Text
+		loadLogo.Parent = ring
+
+		local loadTitleLbl = Instance.new("TextLabel")
+		loadTitleLbl.Position = UDim2.new(0, 8, 0, 56)
+		loadTitleLbl.Size = UDim2.new(1, -16, 0, 16)
+		loadTitleLbl.BackgroundTransparency = 1
+		loadTitleLbl.Text = loadTitle
+		loadTitleLbl.TextColor3 = Theme.Text
+		loadTitleLbl.TextSize = 12
+		loadTitleLbl.Font = Enum.Font.GothamBold
+		loadTitleLbl.TextTruncate = Enum.TextTruncate.AtEnd
+		loadTitleLbl.Parent = loadCard
+
+		local loadStatusLbl = Instance.new("TextLabel")
+		loadStatusLbl.Position = UDim2.new(0, 8, 0, 73)
+		loadStatusLbl.Size = UDim2.new(1, -16, 0, 14)
+		loadStatusLbl.BackgroundTransparency = 1
+		loadStatusLbl.Text = tostring(steps[1]) .. " 0%"
+		loadStatusLbl.TextColor3 = Theme.SubText
+		loadStatusLbl.TextSize = 10
+		loadStatusLbl.Font = Enum.Font.GothamMedium
+		loadStatusLbl.TextTruncate = Enum.TextTruncate.AtEnd
+		loadStatusLbl.Parent = loadCard
+
+		local barTrack = Instance.new("Frame")
+		barTrack.Position = UDim2.new(0, 16, 0, 98)
+		barTrack.Size = UDim2.new(1, -32, 0, 4)
+		barTrack.BackgroundColor3 = Theme.Raised
+		barTrack.BorderSizePixel = 0
+		barTrack.Parent = loadCard
+
+		local barTrackCorner = Instance.new("UICorner")
+		barTrackCorner.CornerRadius = UDim.new(1, 0)
+		barTrackCorner.Parent = barTrack
+
+		local barFill = Instance.new("Frame")
+		barFill.Size = UDim2.new(0, 0, 1, 0)
+		barFill.BackgroundColor3 = Theme.Accent
+		barFill.BorderSizePixel = 0
+		barFill.Parent = barTrack
+
+		local barFillCorner = Instance.new("UICorner")
+		barFillCorner.CornerRadius = UDim.new(1, 0)
+		barFillCorner.Parent = barFill
+
+		-- Progress value 0..100 is tweened; the bar and text follow its changes.
+		local progress = Instance.new("NumberValue")
+		progress.Parent = loadCard
+		table.insert(Window.Connections, progress.Changed:Connect(function(v)
+			local pct = math.clamp(math.floor(v + 0.5), 0, 100)
+			local idx = math.min(#steps, math.floor(pct / 100 * #steps) + 1)
+			barFill.Size = UDim2.new(pct / 100, 0, 1, 0)
+			loadStatusLbl.Text = tostring(steps[idx]) .. " " .. tostring(pct) .. "%"
+		end))
+
+		finishLoading = function()
+			if loadingDone or Window.IsDestroyed then return end
+			loadingDone = true
+			if loadingTween then pcall(function() loadingTween:Cancel() end) end
+			if spinTween then pcall(function() spinTween:Cancel() end) end
+
+			barFill.Size = UDim2.new(1, 0, 1, 0)
+			local outInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			playTween(backdrop, outInfo, {BackgroundTransparency = 1})
+			playTween(loadCard, outInfo, {
+				GroupTransparency = 1,
+				Size = UDim2.fromOffset(math.floor(cardW * 0.9), math.floor(cardH * 0.9)),
+			}, function()
+				loadCard:Destroy()
+				backdrop:Destroy()
+				toggleBtn.Visible = true
+				if config.AutoOpen ~= false and not isOpen then
+					toggleWindow()
+				end
+			end)
+		end
+
+		-- Enter: backdrop dims, card appears while growing
+		local inInfo = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		playTween(backdrop, TweenInfo.new(0.25), {BackgroundTransparency = 0.45})
+		playTween(loadCard, inInfo, {
+			GroupTransparency = 0,
+			Size = UDim2.fromOffset(cardW, cardH),
+		})
+
+		-- Spinner keeps spinning until loading finishes
+		spinTween = playTween(arcGradient,
+			TweenInfo.new(0.9, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1),
+			{Rotation = 360})
+
+		loadingTween = playTween(progress,
+			TweenInfo.new(loadDuration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+			{Value = 100},
+			function(state)
+				if state == Enum.PlaybackState.Completed then
+					finishLoading()
+				end
+			end)
+	end
+
+	-- Skip/finish loading early (e.g. once all tabs have been created)
+	function Window:FinishLoading()
+		if finishLoading then finishLoading() end
 	end
 
 	return Window
