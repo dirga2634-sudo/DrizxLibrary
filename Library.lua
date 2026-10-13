@@ -1,5 +1,5 @@
 --[[
-    DrizxLibrary v13.1.0
+    DrizxLibrary v13.2.0
     Lightweight Roblox UI library for touch screens (mobile) and PC.
     Creators: absorpohonods & haibung03
 
@@ -17,7 +17,38 @@
         AutoOpen = true           -- open the window automatically after loading finishes
         CloseAction = "Destroy"   -- X button: "Destroy" (remove the UI completely) or "Hide" (just hide it)
 
-    New methods: Window:Close() (remove the UI with an animation), Window:FinishLoading() (skip loading)
+    Floating button (the round button that opens/closes the menu) - fully customizable:
+        FloatingButton = {
+            Icon = 123456789,                  -- any image asset id, "rbxassetid://...", or a preset name
+            Size = 42,                         -- pixels (24 - 96)
+            Shape = "Circle",                  -- "Circle", "Rounded" or "Square"
+            CornerRadius = 8,                  -- optional, in pixels (overrides Shape)
+            BackgroundColor = Color3.fromRGB(18, 22, 31),
+            BackgroundTransparency = 0.15,
+            StrokeColor = Color3.fromRGB(0, 255, 120),
+            StrokeThickness = 1.2,
+            ImageColor = Color3.new(1, 1, 1),  -- tint (custom images are not tinted by default)
+            ScaleType = "Crop",                -- "Crop", "Fit" or "Stretch"
+            Position = Vector2.new(15, 200),   -- start position in pixels
+            Visible = true,
+        }
+        FloatingIcon = 123456789               -- shorthand for FloatingButton.Icon
+
+    Menu (the main window) - fully customizable:
+        Menu = {
+            Width = 420, Height = 280,         -- preferred size in pixels (clamped to the screen)
+            BackgroundColor = Color3.fromRGB(13, 17, 23),
+            BackgroundTransparency = 0,
+            BackgroundImage = 123456789,       -- image asset id shown behind the menu
+            BackgroundImageTransparency = 0,
+            CornerRadius = 10,
+            StrokeColor = Color3.fromRGB(45, 55, 72),
+            StrokeThickness = 1.2,
+            Icon = 123456789,                  -- icon shown in the header
+        }
+
+    New methods: Window:Close() (remove the UI with an animation), Window:FinishLoading() (skip loading),
+                 Window:SetFloatingButton(options or assetId), Window:SetMenu(options)  (change styling at runtime)
 
     Full documentation: see README.md
 ]]--
@@ -32,7 +63,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local DrizxUI = {}
 DrizxUI.__index = DrizxUI
-DrizxUI.Version = "13.1.0"
+DrizxUI.Version = "13.2.0"
 DrizxUI.Windows = {}
 
 local TOPBAR_H = 38
@@ -128,12 +159,35 @@ local IconPresets = {
 	["Palette"]    = "rbxassetid://10723341398"
 }
 
+-- Accepts a preset name ("Home"), an asset id (number or numeric string),
+-- "rbxassetid://123", "rbxthumb://...", "rbxasset://...", or a roblox.com/asset/?id=123 link.
+-- Returns "" when the input is not a recognized icon.
 local function parseIcon(iconInput)
-	if not iconInput or iconInput == "" then return "" end
-	if IconPresets[iconInput] then return IconPresets[iconInput] end
-	if tonumber(iconInput) then return "rbxassetid://" .. tostring(iconInput) end
-	if string.find(tostring(iconInput), "rbxassetid://") then return iconInput end
+	if iconInput == nil or iconInput == "" then return "" end
+	if type(iconInput) == "number" then
+		return "rbxassetid://" .. string.format("%.0f", iconInput)
+	end
+
+	local text = tostring(iconInput)
+	text = (string.gsub(text, "^%s+", ""))
+	text = (string.gsub(text, "%s+$", ""))
+
+	if IconPresets[text] then return IconPresets[text] end
+	if string.match(text, "^%d+$") then return "rbxassetid://" .. text end
+	if string.find(text, "^rbxassetid://") or string.find(text, "^rbxthumb://") or string.find(text, "^rbxasset://") then
+		return text
+	end
+	if string.find(text, "roblox.com", 1, true) then
+		local id = string.match(text, "[?&]id=(%d+)")
+		if id then return "rbxassetid://" .. id end
+	end
 	return ""
+end
+
+-- Preset icons are glyphs that get tinted with the theme text color;
+-- custom images (asset ids) are shown as-is.
+local function isPresetIcon(iconInput)
+	return IconPresets[tostring(iconInput)] ~= nil
 end
 
 local function escapeRichText(text)
@@ -159,9 +213,22 @@ local function computeSidebarWidth(w)
 	return math.min(sw, math.max(48, w - 18 - MIN_CONTENT_W))
 end
 
-local function computeWindowSize(vp)
-	local w = math.clamp(vp.X - 20, math.min(MIN_WIN_W, vp.X), 480)
-	local h = math.clamp(vp.Y - 40, math.min(MIN_WIN_H, vp.Y), 300)
+-- prefW / prefH are optional custom sizes (Menu.Width / Menu.Height); they are always
+-- clamped so the window never gets smaller than the minimum or larger than the screen.
+local function computeWindowSize(vp, prefW, prefH)
+	local minW = math.min(MIN_WIN_W, vp.X)
+	local minH = math.min(MIN_WIN_H, vp.Y)
+	local w, h
+	if prefW then
+		w = math.clamp(prefW, minW, math.max(minW, vp.X - 10))
+	else
+		w = math.clamp(vp.X - 20, minW, 480)
+	end
+	if prefH then
+		h = math.clamp(prefH, minH, math.max(minH, vp.Y - 20))
+	else
+		h = math.clamp(vp.Y - 40, minH, 300)
+	end
 	return w, h
 end
 
@@ -247,10 +314,36 @@ function DrizxUI:CreateWindow(config)
 	local subTitle   = tostring(config.SubTitle or ("v" .. DrizxUI.Version))
 	local logoAsset  = parseIcon(config.Logo or "Zap")
 
-	local bgType     = config.BackgroundType or "Color"
-	local bgColor    = config.BackgroundColor or Theme.Background
-	local bgImage    = config.BackgroundImage or ""
-	local bgTransp   = config.BackgroundTransparency or 0
+	local function iconTint(input)
+		return isPresetIcon(input) and Theme.Text or Color3.new(1, 1, 1)
+	end
+
+	-- Floating button options: FloatingButton = { ... } or FloatingButton = assetId, plus the FloatingIcon shorthand.
+	local floatCfg = config.FloatingButton
+	if type(floatCfg) ~= "table" then
+		floatCfg = { Icon = floatCfg or config.FloatingIcon }
+	elseif floatCfg.Icon == nil and config.FloatingIcon ~= nil then
+		floatCfg = table.clone(floatCfg)
+		floatCfg.Icon = config.FloatingIcon
+	end
+
+	-- Menu (main window) options. The old top-level Background* options still work.
+	local menuCfg = type(config.Menu) == "table" and config.Menu or {}
+	local legacyImage = (config.BackgroundType == "Image") and config.BackgroundImage or nil
+	local menuInit = {
+		Width = menuCfg.Width,
+		Height = menuCfg.Height,
+		BackgroundColor = menuCfg.BackgroundColor or config.BackgroundColor,
+		BackgroundTransparency = menuCfg.BackgroundTransparency or config.BackgroundTransparency,
+		BackgroundImage = menuCfg.BackgroundImage or legacyImage,
+		BackgroundImageTransparency = menuCfg.BackgroundImageTransparency,
+		CornerRadius = menuCfg.CornerRadius,
+		StrokeColor = menuCfg.StrokeColor,
+		StrokeThickness = menuCfg.StrokeThickness,
+		Icon = menuCfg.Icon,
+	}
+	local menuPrefW = tonumber(menuInit.Width)
+	local menuPrefH = tonumber(menuInit.Height)
 
 	local Window = {
 		CurrentTab = nil,
@@ -305,6 +398,170 @@ function DrizxUI:CreateWindow(config)
 
 	local screenGui = Instance.new("ScreenGui")
 	screenGui.Name = "DrizxLibrary_" .. tostring(math.random(10000, 99999))
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	screenGui.Parent = PlayerGui
+
+	-- If the ScreenGui is removed from outside (e.g. by another script), clean up all connections too.
+	local destroyedExternally = false
+	table.insert(Window.Connections, screenGui.Destroying:Connect(function()
+		destroyedExternally = true
+		Window:Destroy()
+	end))
+
+	local function getViewport()
+		local cam = Workspace.CurrentCamera
+		if cam then
+			return cam.ViewportSize
+		end
+		return Vector2.new(1024, 768)
+	end
+
+	local initialVp = getViewport()
+	local winWidth, winHeight = computeWindowSize(initialVp, menuPrefW, menuPrefH)
+	local sidebarWidth = computeSidebarWidth(winWidth)
+
+	local isOpen = false
+	local applyLayout
+	local toggleWindow
+
+	local function clampWindowPos(x, y)
+		local vp = getViewport()
+		local curH = (isOpen and not Window.Minimized) and winHeight or TOPBAR_H
+		return math.clamp(x, 0, math.max(0, vp.X - winWidth)),
+			math.clamp(y, 0, math.max(0, vp.Y - curH))
+	end
+
+	-- Notification container (size/position handled by applyLayout)
+	local notifContainer = Instance.new("Frame")
+	notifContainer.Name = "DrizxNotifContainer"
+	notifContainer.Size = UDim2.new(0, 220, 1, -20)
+	notifContainer.Position = UDim2.new(1, -230, 0, 10)
+	notifContainer.BackgroundTransparency = 1
+	notifContainer.ZIndex = 1000
+	notifContainer.Parent = screenGui
+
+	local notifLayout = Instance.new("UIListLayout")
+	notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	notifLayout.Padding = UDim.new(0, 8)
+	notifLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+	notifLayout.Parent = notifContainer
+
+	function Window:Notify(notifConfig)
+		if Window.IsDestroyed then return end
+		notifConfig = notifConfig or {}
+		local title = tostring(notifConfig.Title or "Notification")
+		local content = tostring(notifConfig.Content or "")
+		local duration = math.max(0.5, tonumber(notifConfig.Duration) or 3)
+		local icon = parseIcon(notifConfig.Icon or "Bell")
+
+		local card = Instance.new("Frame")
+		card.Size = UDim2.new(1, 0, 0, 56)
+		card.BackgroundColor3 = Theme.Notification
+		card.BorderSizePixel = 0
+		card.ClipsDescendants = true
+		card.ZIndex = 1001
+		card.Parent = notifContainer
+
+		table.insert(Window.ActiveNotifications, card)
+
+		local cCorner = Instance.new("UICorner")
+		cCorner.CornerRadius = UDim.new(0, 8)
+		cCorner.Parent = card
+
+		local cStroke = Instance.new("UIStroke")
+		cStroke.Color = Theme.Stroke
+		cStroke.Thickness = 1
+		cStroke.Parent = card
+
+		local iconImg = Instance.new("ImageLabel")
+		iconImg.Size = UDim2.new(0, 18, 0, 18)
+		iconImg.Position = UDim2.new(0, 10, 0, 10)
+		iconImg.BackgroundTransparency = 1
+		iconImg.Image = icon
+		iconImg.ImageColor3 = Theme.Accent
+		iconImg.ZIndex = 1002
+		iconImg.Parent = card
+
+		local titleLbl = Instance.new("TextLabel")
+		titleLbl.Size = UDim2.new(1, -44, 0, 16)
+		titleLbl.Position = UDim2.new(0, 34, 0, 8)
+		titleLbl.BackgroundTransparency = 1
+		titleLbl.Text = title
+		titleLbl.TextColor3 = Theme.Text
+		titleLbl.TextSize = 11
+		titleLbl.Font = Enum.Font.GothamBold
+		titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+		titleLbl.TextTruncate = Enum.TextTruncate.AtEnd
+		titleLbl.ZIndex = 1002
+		titleLbl.Parent = card
+
+		local contentLbl = Instance.new("TextLabel")
+		contentLbl.Size = UDim2.new(1, -44, 0, 22)
+		contentLbl.Position = UDim2.new(0, 34, 0, 24)
+		contentLbl.BackgroundTransparency = 1
+		contentLbl.Text = content
+		contentLbl.TextColor3 = Theme.SubText
+		contentLbl.TextSize = 10
+		contentLbl.Font = Enum.Font.GothamMedium
+		contentLbl.TextXAlignment = Enum.TextXAlignment.Left
+		contentLbl.TextYAlignment = Enum.TextYAlignment.Top
+		contentLbl.TextWrapped = true
+		contentLbl.TextTruncate = Enum.TextTruncate.AtEnd
+		contentLbl.ZIndex = 1002
+		contentLbl.Parent = card
+
+		local pBar = Instance.new("Frame")
+		pBar.Size = UDim2.new(1, 0, 0, 2)
+		pBar.Position = UDim2.new(0, 0, 1, -2)
+		pBar.BackgroundColor3 = Theme.Accent
+		pBar.BorderSizePixel = 0
+		pBar.ZIndex = 1003
+		pBar.Parent = card
+
+		-- Tween chain: progress -> fade -> remove. No threads are left waiting.
+		playTween(pBar, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 0, 2)}, function(state)
+			if state ~= Enum.PlaybackState.Completed then return end
+			local fadeInfo = TweenInfo.new(0.2)
+			playTween(iconImg, fadeInfo, {ImageTransparency = 1})
+			playTween(titleLbl, fadeInfo, {TextTransparency = 1})
+			playTween(contentLbl, fadeInfo, {TextTransparency = 1})
+			playTween(pBar, fadeInfo, {BackgroundTransparency = 1})
+			playTween(cStroke, fadeInfo, {Transparency = 1})
+			playTween(card, fadeInfo, {BackgroundTransparency = 1}, function()
+				local idx = table.find(Window.ActiveNotifications, card)
+				if idx then table.remove(Window.ActiveNotifications, idx) end
+				if card.Parent then card:Destroy() end
+			end)
+		end)
+	end
+
+	-- Floating Toggle Button (drag + tap). Look is customizable via FloatingButton / Window:SetFloatingButton.
+	local toggleSize = TOGGLE_SIZE
+	local floatVisible = true
+	local floatLoadingHidden = false
+	local floatShape = "circle"
+	local floatCorner = nil
+	local toggleBtn = Instance.new("ImageButton")
+	toggleBtn.Name = "DrizxToggleBtn"
+	toggleBtn.Size = UDim2.new(0, toggleSize, 0, toggleSize)
+	toggleBtn.Position = UDim2.fromOffset(15, math.floor(initialVp.Y / 2 - toggleSize / 2))
+	toggleBtn.Image = logoAsset
+	toggleBtn.ImageColor3 = iconTint(config.Logo or "Zap")
+	toggleBtn.ScaleType = Enum.ScaleType.Crop
+	toggleBtn.AutoButtonColor = false
+	toggleBtn.BackgroundTransparency = 0.15
+	toggleBtn.BackgroundColor3 = Theme.Surface
+	toggleBtn.Active = true
+	toggleBtn.ZIndex = 200
+	toggleBtn.Parent = screenGui
+
+	local toggleCorner = Instance.new("UICorner")
+	toggleCorner.CornerRadius = UDim.new(1, 0)
+	toggleCorner.Parent = toggleBtn
+
+	local toggleStroke = Instance.new("UISte = "DrizxLibrary_" .. tostring(math.random(10000, 99999))
 	screenGui.ResetOnSpawn = false
 	screenGui.IgnoreGuiInset = true
 	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
