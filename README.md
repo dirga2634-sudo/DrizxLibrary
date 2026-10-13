@@ -2,13 +2,14 @@
 
 Lightweight Roblox UI library built for touch screens (mobile) and PC.
 
-**Version:** 13.1.0
+**Version:** 13.2.0
 **Creators:** absorpohonods & haibung03
 
 ## Features
 
 - Works with both mouse and touch input
 - Draggable window and draggable floating toggle button
+- **Fully customizable floating button** (your own asset id, size, shape, colors, border) and **customizable menu** (size, background color/image, corners, border, header icon)
 - Animated **loading screen** (spinner, progress bar, status text)
 - **Minimize** (collapse to the header) and **Close** (remove the UI completely)
 - Tabs with icons, plus Section, Paragraph, Button, Toggle, Slider, Dropdown and Textbox components
@@ -85,10 +86,13 @@ All fields are optional.
 | `SubTitle` | string | `"v" .. Library.Version` | Text shown after the title. |
 | `Logo` | string / number | `"Zap"` | Icon preset name, asset id, or `rbxassetid://...`. Used in the header, floating button and loading card. |
 | `Theme` | string / table | `"Dark"` | `"Dark"`, `"Light"`, or an override table (see [Themes](#themes)). |
-| `BackgroundType` | string | `"Color"` | `"Color"` or `"Image"`. |
-| `BackgroundColor` | Color3 | theme `Background` | Window background color. |
-| `BackgroundImage` | string / number | `""` | Image used when `BackgroundType = "Image"`. |
-| `BackgroundTransparency` | number | `0` | Window background transparency. |
+| `FloatingButton` | table / asset id | `nil` | Customize the floating button. See [Floating button](#floating-button). |
+| `FloatingIcon` | string / number | `nil` | Shorthand for `FloatingButton.Icon`. |
+| `Menu` | table | `nil` | Customize the menu (main window). See [Menu](#menu). |
+| `BackgroundType` | string | `"Color"` | Legacy. `"Color"` or `"Image"`. Prefer `Menu.BackgroundImage`. |
+| `BackgroundColor` | Color3 | theme `Background` | Legacy. Prefer `Menu.BackgroundColor`. |
+| `BackgroundImage` | string / number | `""` | Legacy. Used when `BackgroundType = "Image"`. Prefer `Menu.BackgroundImage`. |
+| `BackgroundTransparency` | number | `0` | Legacy. Prefer `Menu.BackgroundTransparency`. |
 | `Loading` | boolean | `true` | Show the loading animation. Set to `false` to disable it. |
 | `LoadingTitle` | string | `Title` | Title text on the loading card. |
 | `LoadingDuration` | number | `1.8` | Loading time in seconds (minimum `0.3`). |
@@ -111,6 +115,101 @@ Destroys every window created by the library.
 | `Library.Version` | Library version string. |
 | `Library.Windows` | List of live windows. |
 | `Library.Themes` | The built-in `Dark` and `Light` theme tables. |
+
+---
+
+## Floating button
+
+The round button that opens and closes the menu. Everything about it can be customized, including the image: just give it your own asset id.
+
+```lua
+local Window = Library:CreateWindow({
+    Title = "My Hub",
+    FloatingButton = {
+        Icon = 1234567890,                      -- your image asset id
+        Size = 48,
+        Shape = "Circle",
+        StrokeColor = Color3.fromRGB(0, 255, 120),
+        StrokeThickness = 2,
+    },
+})
+```
+
+Shortcuts:
+
+```lua
+FloatingIcon = 1234567890                 -- same as FloatingButton = { Icon = 1234567890 }
+FloatingButton = 1234567890               -- also works
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Icon` | string / number | `Logo` | Image asset id, `"rbxassetid://..."`, or a preset icon name. |
+| `Size` | number | `42` | Size in pixels (clamped between `24` and `96`). |
+| `Shape` | string | `"Circle"` | `"Circle"`, `"Rounded"` or `"Square"`. |
+| `CornerRadius` | number | from `Shape` | Corner radius in pixels. Overrides `Shape`. |
+| `BackgroundColor` | Color3 | theme `Surface` | Color behind the image. |
+| `BackgroundTransparency` | number | `0.15` | `0` (solid) to `1` (invisible). |
+| `StrokeColor` | Color3 | theme `Accent` | Border (ring) color. |
+| `StrokeThickness` | number | `1.2` | Border thickness. Use `0` for no border. |
+| `ImageColor` | Color3 | white for custom images | Tint applied to the image. |
+| `ScaleType` | string | `"Crop"` | `"Crop"`, `"Fit"` or `"Stretch"`. |
+| `Position` | Vector2 / UDim2 | left edge, vertically centered | Start position in pixels. |
+| `Visible` | boolean | `true` | Set to `false` to hide the button (open the menu with `Window:Toggle()`). |
+
+Only the options you pass are changed, and you can change them at any time:
+
+```lua
+Window:SetFloatingButton({ Icon = 9876543210, StrokeColor = Color3.fromRGB(255, 80, 80) })
+Window:SetFloatingButton(9876543210) -- icon only
+```
+
+The button stays draggable, and is always kept inside the screen.
+
+---
+
+## Menu
+
+The menu is the main window. Size, background, corners, border and header icon are all customizable.
+
+```lua
+local Window = Library:CreateWindow({
+    Title = "My Hub",
+    Menu = {
+        Width = 440,
+        Height = 280,
+        BackgroundColor = Color3.fromRGB(10, 10, 16),
+        BackgroundImage = 1234567890,        -- your image asset id
+        BackgroundImageTransparency = 0.3,
+        CornerRadius = 14,
+        StrokeColor = Color3.fromRGB(0, 255, 120),
+        StrokeThickness = 1.5,
+        Icon = 1234567890,                   -- icon in the header
+    },
+})
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Width` | number | auto | Preferred width in pixels. Always clamped to the screen and a sensible minimum. |
+| `Height` | number | auto | Preferred height in pixels. Always clamped to the screen and a sensible minimum. |
+| `BackgroundColor` | Color3 | theme `Background` | Window background color. |
+| `BackgroundTransparency` | number | `0` | `0` (solid) to `1` (invisible). |
+| `BackgroundImage` | string / number | `nil` | Image asset id shown behind the menu. |
+| `BackgroundImageTransparency` | number | `0` | `0` (fully visible) to `1` (hidden). |
+| `CornerRadius` | number | `10` | Corner radius in pixels. |
+| `StrokeColor` | Color3 | theme `Stroke` | Border color. |
+| `StrokeThickness` | number | `1.2` | Border thickness. |
+| `Icon` | string / number | `Logo` | Icon shown in the header. |
+
+Change it at any time:
+
+```lua
+Window:SetMenu({ BackgroundImage = 9876543210, CornerRadius = 6 })
+Window:SetMenu({ BackgroundImage = "" }) -- remove the background image
+```
+
+For colors of the content inside the menu (cards, text, accent), use [Themes](#themes).
 
 ---
 
@@ -152,6 +251,14 @@ Creates a tab in the sidebar. The icon defaults to `"Code"`. Calling it again wi
 ### `Window:Toggle()`
 
 Opens the window if it is closed, or hides it if it is open.
+
+### `Window:SetFloatingButton(options)` / `Window:SetFloatingButton(assetId)`
+
+Changes the floating button's look at runtime. See [Floating button](#floating-button).
+
+### `Window:SetMenu(options)`
+
+Changes the menu's look at runtime. See [Menu](#menu).
 
 ### `Window:Close()`
 
@@ -325,11 +432,16 @@ Unknown theme names fall back to `Dark` with a warning in the output.
 
 ## Icons
 
-Anywhere an icon is accepted (`Logo`, tab icons, notification icons) you can pass:
+Anywhere an icon is accepted (`Logo`, `FloatingButton.Icon`, `Menu.Icon`, tab icons, notification icons) you can pass:
 
 - a preset name: `Home`, `Settings`, `Chat`, `Player`, `Zap`, `Search`, `Shield`, `Code`, `Bell`, `Globe`, `Key`, `Palette`
 - an asset id (number or numeric string), e.g. `10723415903`
-- a full asset string, e.g. `"rbxassetid://10723415903"`
+- a full asset string, e.g. `"rbxassetid://10723415903"` (`rbxthumb://` and `rbxasset://` also work)
+- a `roblox.com/asset/?id=...` link
+
+Preset icons are tinted with the theme's text color. Your own images (asset ids) are shown exactly as they are, with no tint, unless you set `ImageColor`.
+
+If your image shows up blank, make sure you are using the **Image** asset id and not the **Decal** id.
 
 ---
 
@@ -342,6 +454,8 @@ local Window = Library:CreateWindow({
     Title = "Drizx Hub",
     SubTitle = "v1.0",
     Theme = { Base = "Dark", Accent = Color3.fromRGB(0, 200, 140) },
+    FloatingButton = { Icon = 1234567890, Size = 46, StrokeColor = Color3.fromRGB(0, 200, 140) },
+    Menu = { Width = 440, Height = 280, CornerRadius = 14 },
     LoadingDuration = 2,
     LoadingSteps = { "Connecting...", "Loading features...", "Ready!" },
 })
@@ -370,6 +484,12 @@ end)
 ---
 
 ## Changelog
+
+### 13.2.0
+- The floating button is now fully customizable: your own asset id, size, shape, colors, border, position (`FloatingButton`, `FloatingIcon`, `Window:SetFloatingButton`).
+- The menu is now customizable: size, background color/image, corner radius, border, header icon (`Menu`, `Window:SetMenu`).
+- Icons now also accept `rbxthumb://`, `rbxasset://` and `roblox.com/asset/?id=` links, and long asset ids are handled correctly.
+- Custom images are no longer tinted with the theme text color.
 
 ### 13.1.0
 - Added an animated loading screen (`Loading`, `LoadingTitle`, `LoadingDuration`, `LoadingSteps`, `AutoOpen`, `Window:FinishLoading()`).
