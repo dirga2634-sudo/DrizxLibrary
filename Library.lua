@@ -561,164 +561,6 @@ function DrizxUI:CreateWindow(config)
 	toggleCorner.CornerRadius = UDim.new(1, 0)
 	toggleCorner.Parent = toggleBtn
 
-	local toggleStroke = Instance.new("UISte = "DrizxLibrary_" .. tostring(math.random(10000, 99999))
-	screenGui.ResetOnSpawn = false
-	screenGui.IgnoreGuiInset = true
-	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	screenGui.Parent = PlayerGui
-
-	-- If the ScreenGui is removed from outside (e.g. by another script), clean up all connections too.
-	local destroyedExternally = false
-	table.insert(Window.Connections, screenGui.Destroying:Connect(function()
-		destroyedExternally = true
-		Window:Destroy()
-	end))
-
-	local function getViewport()
-		local cam = Workspace.CurrentCamera
-		if cam then
-			return cam.ViewportSize
-		end
-		return Vector2.new(1024, 768)
-	end
-
-	local initialVp = getViewport()
-	local winWidth, winHeight = computeWindowSize(initialVp)
-	local sidebarWidth = computeSidebarWidth(winWidth)
-
-	local isOpen = false
-	local applyLayout
-	local toggleWindow
-
-	local function clampWindowPos(x, y)
-		local vp = getViewport()
-		local curH = (isOpen and not Window.Minimized) and winHeight or TOPBAR_H
-		return math.clamp(x, 0, math.max(0, vp.X - winWidth)),
-			math.clamp(y, 0, math.max(0, vp.Y - curH))
-	end
-
-	-- Notification container (size/position handled by applyLayout)
-	local notifContainer = Instance.new("Frame")
-	notifContainer.Name = "DrizxNotifContainer"
-	notifContainer.Size = UDim2.new(0, 220, 1, -20)
-	notifContainer.Position = UDim2.new(1, -230, 0, 10)
-	notifContainer.BackgroundTransparency = 1
-	notifContainer.ZIndex = 1000
-	notifContainer.Parent = screenGui
-
-	local notifLayout = Instance.new("UIListLayout")
-	notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	notifLayout.Padding = UDim.new(0, 8)
-	notifLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
-	notifLayout.Parent = notifContainer
-
-	function Window:Notify(notifConfig)
-		if Window.IsDestroyed then return end
-		notifConfig = notifConfig or {}
-		local title = tostring(notifConfig.Title or "Notification")
-		local content = tostring(notifConfig.Content or "")
-		local duration = math.max(0.5, tonumber(notifConfig.Duration) or 3)
-		local icon = parseIcon(notifConfig.Icon or "Bell")
-
-		local card = Instance.new("Frame")
-		card.Size = UDim2.new(1, 0, 0, 56)
-		card.BackgroundColor3 = Theme.Notification
-		card.BorderSizePixel = 0
-		card.ClipsDescendants = true
-		card.ZIndex = 1001
-		card.Parent = notifContainer
-
-		table.insert(Window.ActiveNotifications, card)
-
-		local cCorner = Instance.new("UICorner")
-		cCorner.CornerRadius = UDim.new(0, 8)
-		cCorner.Parent = card
-
-		local cStroke = Instance.new("UIStroke")
-		cStroke.Color = Theme.Stroke
-		cStroke.Thickness = 1
-		cStroke.Parent = card
-
-		local iconImg = Instance.new("ImageLabel")
-		iconImg.Size = UDim2.new(0, 18, 0, 18)
-		iconImg.Position = UDim2.new(0, 10, 0, 10)
-		iconImg.BackgroundTransparency = 1
-		iconImg.Image = icon
-		iconImg.ImageColor3 = Theme.Accent
-		iconImg.ZIndex = 1002
-		iconImg.Parent = card
-
-		local titleLbl = Instance.new("TextLabel")
-		titleLbl.Size = UDim2.new(1, -44, 0, 16)
-		titleLbl.Position = UDim2.new(0, 34, 0, 8)
-		titleLbl.BackgroundTransparency = 1
-		titleLbl.Text = title
-		titleLbl.TextColor3 = Theme.Text
-		titleLbl.TextSize = 11
-		titleLbl.Font = Enum.Font.GothamBold
-		titleLbl.TextXAlignment = Enum.TextXAlignment.Left
-		titleLbl.TextTruncate = Enum.TextTruncate.AtEnd
-		titleLbl.ZIndex = 1002
-		titleLbl.Parent = card
-
-		local contentLbl = Instance.new("TextLabel")
-		contentLbl.Size = UDim2.new(1, -44, 0, 22)
-		contentLbl.Position = UDim2.new(0, 34, 0, 24)
-		contentLbl.BackgroundTransparency = 1
-		contentLbl.Text = content
-		contentLbl.TextColor3 = Theme.SubText
-		contentLbl.TextSize = 10
-		contentLbl.Font = Enum.Font.GothamMedium
-		contentLbl.TextXAlignment = Enum.TextXAlignment.Left
-		contentLbl.TextYAlignment = Enum.TextYAlignment.Top
-		contentLbl.TextWrapped = true
-		contentLbl.TextTruncate = Enum.TextTruncate.AtEnd
-		contentLbl.ZIndex = 1002
-		contentLbl.Parent = card
-
-		local pBar = Instance.new("Frame")
-		pBar.Size = UDim2.new(1, 0, 0, 2)
-		pBar.Position = UDim2.new(0, 0, 1, -2)
-		pBar.BackgroundColor3 = Theme.Accent
-		pBar.BorderSizePixel = 0
-		pBar.ZIndex = 1003
-		pBar.Parent = card
-
-		-- Tween chain: progress -> fade -> remove. No threads are left waiting.
-		playTween(pBar, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 0, 2)}, function(state)
-			if state ~= Enum.PlaybackState.Completed then return end
-			local fadeInfo = TweenInfo.new(0.2)
-			playTween(iconImg, fadeInfo, {ImageTransparency = 1})
-			playTween(titleLbl, fadeInfo, {TextTransparency = 1})
-			playTween(contentLbl, fadeInfo, {TextTransparency = 1})
-			playTween(pBar, fadeInfo, {BackgroundTransparency = 1})
-			playTween(cStroke, fadeInfo, {Transparency = 1})
-			playTween(card, fadeInfo, {BackgroundTransparency = 1}, function()
-				local idx = table.find(Window.ActiveNotifications, card)
-				if idx then table.remove(Window.ActiveNotifications, idx) end
-				if card.Parent then card:Destroy() end
-			end)
-		end)
-	end
-
-	-- Floating Toggle Button (drag + tap)
-	local toggleBtn = Instance.new("ImageButton")
-	toggleBtn.Name = "DrizxToggleBtn"
-	toggleBtn.Size = UDim2.new(0, TOGGLE_SIZE, 0, TOGGLE_SIZE)
-	toggleBtn.Position = UDim2.fromOffset(15, math.floor(initialVp.Y / 2 - TOGGLE_SIZE / 2))
-	toggleBtn.Image = logoAsset
-	toggleBtn.ImageColor3 = Theme.Text
-	toggleBtn.AutoButtonColor = false
-	toggleBtn.BackgroundTransparency = 0.15
-	toggleBtn.BackgroundColor3 = Theme.Surface
-	toggleBtn.Active = true
-	toggleBtn.ZIndex = 200
-	toggleBtn.Parent = screenGui
-
-	local toggleCorner = Instance.new("UICorner")
-	toggleCorner.CornerRadius = UDim.new(1, 0)
-	toggleCorner.Parent = toggleBtn
-
 	local toggleStroke = Instance.new("UIStroke")
 	toggleStroke.Color = Theme.Accent
 	toggleStroke.Thickness = 1.2
@@ -740,8 +582,8 @@ function DrizxUI:CreateWindow(config)
 				toggleMoved = true
 			end
 			local vp = getViewport()
-			local newX = math.clamp(toggleStartPos.X + delta.X, 0, math.max(0, vp.X - TOGGLE_SIZE))
-			local newY = math.clamp(toggleStartPos.Y + delta.Y, 0, math.max(0, vp.Y - TOGGLE_SIZE))
+			local newX = math.clamp(toggleStartPos.X + delta.X, 0, math.max(0, vp.X - toggleSize))
+			local newY = math.clamp(toggleStartPos.Y + delta.Y, 0, math.max(0, vp.Y - toggleSize))
 			toggleBtn.Position = UDim2.fromOffset(newX, newY)
 		end,
 		function(cancelled)
@@ -759,8 +601,8 @@ function DrizxUI:CreateWindow(config)
 		math.floor((initialVp.X - winWidth) / 2),
 		math.floor((initialVp.Y - winHeight) / 2)
 	)
-	mainFrame.BackgroundColor3 = bgColor
-	mainFrame.BackgroundTransparency = bgTransp
+	mainFrame.BackgroundColor3 = Theme.Background
+	mainFrame.BackgroundTransparency = 0
 	mainFrame.BorderSizePixel = 0
 	mainFrame.ClipsDescendants = true
 	mainFrame.Visible = false
@@ -776,15 +618,16 @@ function DrizxUI:CreateWindow(config)
 	mainStroke.Thickness = 1.2
 	mainStroke.Parent = mainFrame
 
-	if bgType == "Image" and bgImage ~= "" then
-		local bgImg = Instance.new("ImageLabel")
-		bgImg.Size = UDim2.new(1, 0, 1, 0)
-		bgImg.BackgroundTransparency = 1
-		bgImg.Image = parseIcon(bgImage)
-		bgImg.ScaleType = Enum.ScaleType.Crop
-		bgImg.ZIndex = 0
-		bgImg.Parent = mainFrame
-	end
+	-- Background image: always created, shown only when Menu.BackgroundImage is set.
+	local bgImg = Instance.new("ImageLabel")
+	bgImg.Name = "MenuBackgroundImage"
+	bgImg.Size = UDim2.new(1, 0, 1, 0)
+	bgImg.BackgroundTransparency = 1
+	bgImg.Image = ""
+	bgImg.ScaleType = Enum.ScaleType.Crop
+	bgImg.Visible = false
+	bgImg.ZIndex = 0
+	bgImg.Parent = mainFrame
 
 	-- TopBar header (window drag handle)
 	local topBar = Instance.new("Frame")
@@ -828,7 +671,7 @@ function DrizxUI:CreateWindow(config)
 	headerIcon.Position = UDim2.new(0, 10, 0.5, -9)
 	headerIcon.BackgroundTransparency = 1
 	headerIcon.Image = logoAsset
-	headerIcon.ImageColor3 = Theme.Text
+	headerIcon.ImageColor3 = iconTint(config.Logo or "Zap")
 	headerIcon.ZIndex = 3
 	headerIcon.Parent = topBar
 
@@ -940,7 +783,7 @@ function DrizxUI:CreateWindow(config)
 	contentArea.Size = UDim2.new(1, -(sidebarWidth + 18), 1, -50)
 	contentArea.Position = UDim2.new(0, sidebarWidth + 12, 0, TOPBAR_H + 4)
 	contentArea.BackgroundColor3 = Theme.Surface
-	contentArea.BackgroundTransparency = (bgType == "Image" and 0.25 or 0)
+	contentArea.BackgroundTransparency = 0
 	contentArea.BorderSizePixel = 0
 	contentArea.ClipsDescendants = true
 	contentArea.ZIndex = 2
@@ -959,7 +802,7 @@ function DrizxUI:CreateWindow(config)
 	applyLayout = function()
 		if Window.IsDestroyed then return end
 		local vp = getViewport()
-		winWidth, winHeight = computeWindowSize(vp)
+		winWidth, winHeight = computeWindowSize(vp, menuPrefW, menuPrefH)
 		sidebarWidth = computeSidebarWidth(winWidth)
 
 		sidebar.Size = UDim2.new(0, sidebarWidth, 1, -46)
@@ -977,8 +820,8 @@ function DrizxUI:CreateWindow(config)
 		local x, y = clampWindowPos(mainFrame.Position.X.Offset, mainFrame.Position.Y.Offset)
 		mainFrame.Position = UDim2.fromOffset(x, y)
 
-		local tx = math.clamp(toggleBtn.Position.X.Offset, 0, math.max(0, vp.X - TOGGLE_SIZE))
-		local ty = math.clamp(toggleBtn.Position.Y.Offset, 0, math.max(0, vp.Y - TOGGLE_SIZE))
+		local tx = math.clamp(toggleBtn.Position.X.Offset, 0, math.max(0, vp.X - toggleSize))
+		local ty = math.clamp(toggleBtn.Position.Y.Offset, 0, math.max(0, vp.Y - toggleSize))
 		toggleBtn.Position = UDim2.fromOffset(tx, ty)
 	end
 
@@ -1001,6 +844,177 @@ function DrizxUI:CreateWindow(config)
 
 	setupCameraListener()
 	table.insert(Window.Connections, Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(setupCameraListener))
+
+	-- Floating button styling. Used at creation (FloatingButton = {...}) and at runtime
+	-- through Window:SetFloatingButton. Only the fields you pass are changed.
+	local function applyFloatingStyle(opts)
+		if Window.IsDestroyed or type(opts) ~= "table" then return end
+
+		if opts.Icon ~= nil and opts.Icon ~= "" then
+			local img = parseIcon(opts.Icon)
+			if img ~= "" then
+				toggleBtn.Image = img
+				toggleBtn.ImageColor3 = iconTint(opts.Icon)
+			else
+				warn("[DrizxLibrary] FloatingButton.Icon is not a valid preset name or asset id: " .. tostring(opts.Icon))
+			end
+		end
+
+		if typeof(opts.ImageColor) == "Color3" then
+			toggleBtn.ImageColor3 = opts.ImageColor
+		end
+
+		if opts.ScaleType ~= nil then
+			local st = nil
+			if typeof(opts.ScaleType) == "EnumItem" then
+				if opts.ScaleType.EnumType == Enum.ScaleType then st = opts.ScaleType end
+			else
+				local ok, found = pcall(function() return Enum.ScaleType[tostring(opts.ScaleType)] end)
+				if ok then st = found end
+			end
+			if st then
+				toggleBtn.ScaleType = st
+			else
+				warn('[DrizxLibrary] FloatingButton.ScaleType must be "Crop", "Fit" or "Stretch".')
+			end
+		end
+
+		if tonumber(opts.Size) then
+			toggleSize = math.clamp(math.floor(tonumber(opts.Size)), 24, 96)
+			toggleBtn.Size = UDim2.fromOffset(toggleSize, toggleSize)
+		end
+
+		if opts.Shape ~= nil then
+			local shape = string.lower(tostring(opts.Shape))
+			if shape == "circle" or shape == "rounded" or shape == "square" then
+				floatShape = shape
+				floatCorner = nil
+			else
+				warn('[DrizxLibrary] FloatingButton.Shape must be "Circle", "Rounded" or "Square".')
+			end
+		end
+		if tonumber(opts.CornerRadius) then
+			floatCorner = math.max(0, tonumber(opts.CornerRadius))
+		end
+		if floatCorner then
+			toggleCorner.CornerRadius = UDim.new(0, floatCorner)
+		elseif floatShape == "square" then
+			toggleCorner.CornerRadius = UDim.new(0, 0)
+		elseif floatShape == "rounded" then
+			toggleCorner.CornerRadius = UDim.new(0, math.floor(toggleSize * 0.25))
+		else
+			toggleCorner.CornerRadius = UDim.new(1, 0)
+		end
+
+		if typeof(opts.BackgroundColor) == "Color3" then
+			toggleBtn.BackgroundColor3 = opts.BackgroundColor
+		end
+		if tonumber(opts.BackgroundTransparency) then
+			toggleBtn.BackgroundTransparency = math.clamp(tonumber(opts.BackgroundTransparency), 0, 1)
+		end
+		if typeof(opts.StrokeColor) == "Color3" then
+			toggleStroke.Color = opts.StrokeColor
+		end
+		if tonumber(opts.StrokeThickness) then
+			toggleStroke.Thickness = math.max(0, tonumber(opts.StrokeThickness))
+		end
+
+		if opts.Visible ~= nil then
+			floatVisible = opts.Visible == true
+		end
+		toggleBtn.Visible = floatVisible and not floatLoadingHidden
+
+		if opts.Position ~= nil then
+			local vp = getViewport()
+			local px, py = nil, nil
+			if typeof(opts.Position) == "Vector2" then
+				px, py = opts.Position.X, opts.Position.Y
+			elseif typeof(opts.Position) == "UDim2" then
+				px = opts.Position.X.Scale * vp.X + opts.Position.X.Offset
+				py = opts.Position.Y.Scale * vp.Y + opts.Position.Y.Offset
+			end
+			if px and py then
+				toggleBtn.Position = UDim2.fromOffset(px, py)
+			end
+		end
+
+		-- Re-clamp the button to the screen (size/position may have changed)
+		if applyLayout then applyLayout() end
+	end
+
+	-- Menu (main window) styling. Used at creation (Menu = {...}) and at runtime through
+	-- Window:SetMenu. Only the fields you pass are changed.
+	local function applyMenuStyle(opts)
+		if Window.IsDestroyed or type(opts) ~= "table" then return end
+
+		if typeof(opts.BackgroundColor) == "Color3" then
+			mainFrame.BackgroundColor3 = opts.BackgroundColor
+		end
+		if tonumber(opts.BackgroundTransparency) then
+			mainFrame.BackgroundTransparency = math.clamp(tonumber(opts.BackgroundTransparency), 0, 1)
+		end
+
+		if opts.BackgroundImage ~= nil then
+			local img = parseIcon(opts.BackgroundImage)
+			if img == "" and opts.BackgroundImage ~= "" then
+				warn("[DrizxLibrary] Menu.BackgroundImage is not a valid asset id: " .. tostring(opts.BackgroundImage))
+			end
+			bgImg.Image = img
+			bgImg.Visible = img ~= ""
+			-- Let the image show through the content area a little
+			contentArea.BackgroundTransparency = (img ~= "") and 0.25 or 0
+		end
+		if tonumber(opts.BackgroundImageTransparency) then
+			bgImg.ImageTransparency = math.clamp(tonumber(opts.BackgroundImageTransparency), 0, 1)
+		end
+
+		if tonumber(opts.CornerRadius) then
+			local radius = UDim.new(0, math.max(0, tonumber(opts.CornerRadius)))
+			mainCorner.CornerRadius = radius
+			topCorner.CornerRadius = radius
+		end
+		if typeof(opts.StrokeColor) == "Color3" then
+			mainStroke.Color = opts.StrokeColor
+		end
+		if tonumber(opts.StrokeThickness) then
+			mainStroke.Thickness = math.max(0, tonumber(opts.StrokeThickness))
+		end
+
+		if opts.Icon ~= nil and opts.Icon ~= "" then
+			local img = parseIcon(opts.Icon)
+			if img ~= "" then
+				headerIcon.Image = img
+				headerIcon.ImageColor3 = iconTint(opts.Icon)
+			else
+				warn("[DrizxLibrary] Menu.Icon is not a valid preset name or asset id: " .. tostring(opts.Icon))
+			end
+		end
+
+		local resized = false
+		if tonumber(opts.Width) then
+			menuPrefW = tonumber(opts.Width)
+			resized = true
+		end
+		if tonumber(opts.Height) then
+			menuPrefH = tonumber(opts.Height)
+			resized = true
+		end
+		if resized and applyLayout then applyLayout() end
+	end
+
+	function Window:SetFloatingButton(opts)
+		if type(opts) == "string" or type(opts) == "number" then
+			opts = { Icon = opts }
+		end
+		applyFloatingStyle(opts)
+	end
+
+	function Window:SetMenu(opts)
+		applyMenuStyle(opts)
+	end
+
+	applyFloatingStyle(floatCfg)
+	applyMenuStyle(menuInit)
 
 	-- Window Visibility Logic
 	local function finishAnimation()
@@ -1927,6 +1941,7 @@ function DrizxUI:CreateWindow(config)
 			steps = config.LoadingSteps
 		end
 
+		floatLoadingHidden = true
 		toggleBtn.Visible = false
 
 		local backdrop = Instance.new("Frame")
@@ -2009,7 +2024,7 @@ function DrizxUI:CreateWindow(config)
 		loadLogo.Size = UDim2.fromOffset(14, 14)
 		loadLogo.BackgroundTransparency = 1
 		loadLogo.Image = logoAsset
-		loadLogo.ImageColor3 = Theme.Text
+		loadLogo.ImageColor3 = iconTint(config.Logo or "Zap")
 		loadLogo.Parent = ring
 
 		local loadTitleLbl = Instance.new("TextLabel")
@@ -2080,7 +2095,8 @@ function DrizxUI:CreateWindow(config)
 			}, function()
 				loadCard:Destroy()
 				backdrop:Destroy()
-				toggleBtn.Visible = true
+				floatLoadingHidden = false
+				toggleBtn.Visible = floatVisible
 				if config.AutoOpen ~= false and not isOpen then
 					toggleWindow()
 				end
