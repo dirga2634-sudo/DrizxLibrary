@@ -1,5 +1,5 @@
 --[[
-    DrizxLibrary v13.2.0
+    DrizxLibrary v13.3.0
     Lightweight Roblox UI library for touch screens (mobile) and PC.
     Creators: absorpohonods & haibung03
 
@@ -50,6 +50,16 @@
     New methods: Window:Close() (remove the UI with an animation), Window:FinishLoading() (skip loading),
                  Window:SetFloatingButton(options or assetId), Window:SetMenu(options)  (change styling at runtime)
 
+    New in 13.3.0:
+        Tab:CreateColorPicker({ Name, Default, Callback, Flag })   -- HSV picker, works with touch
+        Tab:CreateDivider()  /  Tab:CreateLabel(text)
+        Flag = "name" on Toggle / Slider / Dropdown / Textbox / ColorPicker -> saved in configs
+        Window:SaveConfig(name) / LoadConfig(name) / ListConfigs() / DeleteConfig(name)   (needs executor file functions)
+        Window:GetConfig() / ApplyConfig(table) / GetFlag(flag) / SetFlag(flag, value)
+        Window:CreateConfigTab()  -- ready-made tab with name box, saved-config list, Save / Load / Delete buttons
+        Menu.Shadow = true, Menu.ShadowTransparency = 0.55   -- soft drop shadow behind the menu
+        ConfigFolder = "DrizxLibrary"                         -- folder used for config files
+
     Full documentation: see README.md
 ]]--
 
@@ -57,13 +67,15 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local DrizxUI = {}
 DrizxUI.__index = DrizxUI
-DrizxUI.Version = "13.2.0"
+DrizxUI.Version = "13.3.0"
 DrizxUI.Windows = {}
 
 local TOPBAR_H = 38
@@ -207,6 +219,38 @@ local function safeCall(label, fn, ...)
 	end
 end
 
+-- Color helpers (color picker + config files)
+local function colorToHex(color)
+	return string.format("#%02X%02X%02X",
+		math.floor(color.R * 255 + 0.5),
+		math.floor(color.G * 255 + 0.5),
+		math.floor(color.B * 255 + 0.5))
+end
+
+-- Accepts a Color3, "#RRGGBB" / "RRGGBB", or { R, G, B } (0-255). Returns nil if it can't be understood.
+local function parseColor(value)
+	if typeof(value) == "Color3" then
+		return value
+	end
+	if type(value) == "string" then
+		local hex = string.match(value, "^#?(%x%x%x%x%x%x)$")
+		if hex then
+			return Color3.fromRGB(
+				tonumber(string.sub(hex, 1, 2), 16),
+				tonumber(string.sub(hex, 3, 4), 16),
+				tonumber(string.sub(hex, 5, 6), 16))
+		end
+	elseif type(value) == "table" then
+		local r = tonumber(value.R or value[1])
+		local g = tonumber(value.G or value[2])
+		local b = tonumber(value.B or value[3])
+		if r and g and b then
+			return Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(b, 0, 255))
+		end
+	end
+	return nil
+end
+
 local function computeSidebarWidth(w)
 	local sw = math.clamp(math.floor(w * 0.28), 80, 110)
 	-- The sidebar yields if the content area would drop below MIN_CONTENT_W
@@ -341,6 +385,8 @@ function DrizxUI:CreateWindow(config)
 		StrokeColor = menuCfg.StrokeColor,
 		StrokeThickness = menuCfg.StrokeThickness,
 		Icon = menuCfg.Icon,
+		Shadow = menuCfg.Shadow,
+		ShadowTransparency = menuCfg.ShadowTransparency,
 	}
 	local menuPrefW = tonumber(menuInit.Width)
 	local menuPrefH = tonumber(menuInit.Height)
@@ -349,6 +395,7 @@ function DrizxUI:CreateWindow(config)
 		CurrentTab = nil,
 		Minimized = false,
 		Tabs = {},
+		Flags = {},
 		Connections = {},
 		ActiveTweens = {},
 		ActiveNotifications = {},
@@ -617,6 +664,34 @@ function DrizxUI:CreateWindow(config)
 	mainStroke.Color = Theme.Stroke
 	mainStroke.Thickness = 1.2
 	mainStroke.Parent = mainFrame
+
+	-- Soft drop shadow behind the menu. It is a sibling of mainFrame (mainFrame clips its children)
+	-- and follows the menu's position, size and visibility.
+	local SHADOW_PAD = 50
+	local shadowEnabled = true
+	local shadow = Instance.new("ImageLabel")
+	shadow.Name = "MenuShadow"
+	shadow.BackgroundTransparency = 1
+	shadow.Image = "rbxassetid://8992230677"
+	shadow.ImageColor3 = Color3.new(0, 0, 0)
+	shadow.ImageTransparency = 0.55
+	shadow.ScaleType = Enum.ScaleType.Slice
+	shadow.SliceCenter = Rect.new(99, 99, 99, 99)
+	shadow.ZIndex = 0
+	shadow.Visible = false
+	shadow.Parent = screenGui
+
+	local function syncShadow()
+		if Window.IsDestroyed then return end
+		shadow.Visible = shadowEnabled and mainFrame.Visible
+		local pos = mainFrame.AbsolutePosition
+		local size = mainFrame.AbsoluteSize
+		shadow.Position = UDim2.fromOffset(pos.X - SHADOW_PAD, pos.Y - SHADOW_PAD)
+		shadow.Size = UDim2.fromOffset(size.X + SHADOW_PAD * 2, size.Y + SHADOW_PAD * 2)
+	end
+	table.insert(Window.Connections, mainFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(syncShadow))
+	table.insert(Window.Connections, mainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncShadow))
+	table.insert(Window.Connections, mainFrame:GetPropertyChangedSignal("Visible"):Connect(syncShadow))
 
 	-- Background image: always created, shown only when Menu.BackgroundImage is set.
 	local bgImg = Instance.new("ImageLabel")
@@ -990,6 +1065,14 @@ function DrizxUI:CreateWindow(config)
 			end
 		end
 
+		if opts.Shadow ~= nil then
+			shadowEnabled = opts.Shadow == true
+		end
+		if tonumber(opts.ShadowTransparency) then
+			shadow.ImageTransparency = math.clamp(tonumber(opts.ShadowTransparency), 0, 1)
+		end
+		syncShadow()
+
 		local resized = false
 		if tonumber(opts.Width) then
 			menuPrefW = tonumber(opts.Width)
@@ -1113,6 +1196,46 @@ function DrizxUI:CreateWindow(config)
 	end))
 	table.insert(Window.Connections, minimizeBtn.MouseButton1Click:Connect(toggleMinimize))
 
+	-- Flags: components created with Flag = "name" are stored here so they can be saved/loaded.
+	-- Each entry has Get() (a serializable value) and Set(value) (applies the value AND fires the callback).
+	local function registerFlag(tab, flag, kind, getter, setter)
+		if flag == nil or flag == "" then return end
+		flag = tostring(flag)
+		if Window.Flags[flag] then
+			warn("[DrizxLibrary] Flag '" .. flag .. "' is already used; the new component replaces the old one.")
+		end
+		local entry = { Type = kind, Get = getter, Set = setter }
+		Window.Flags[flag] = entry
+		tab.Flags = tab.Flags or {}
+		tab.Flags[flag] = entry
+	end
+
+	-- Pointer position in the same coordinate space as GuiObject.AbsolutePosition.
+	-- The window uses IgnoreGuiInset = true while InputObject.Position can be shifted by the top GUI inset,
+	-- so the first press on an element calibrates which of the two matches (a press is known to be inside it).
+	local insetMode = nil
+	local function pointerPosition(input, target, calibrate)
+		local insetY = 0
+		pcall(function() insetY = GuiService:GetGuiInset().Y end)
+		local x, y0 = input.Position.X, input.Position.Y
+		local y1 = y0 + insetY
+		if calibrate and insetY ~= 0 then
+			local top = target.AbsolutePosition.Y
+			local bottom = top + target.AbsoluteSize.Y
+			local in0 = y0 >= top and y0 <= bottom
+			local in1 = y1 >= top and y1 <= bottom
+			if in0 and not in1 then
+				insetMode = false
+			elseif in1 and not in0 then
+				insetMode = true
+			end
+		end
+		if insetMode == false then
+			return Vector2.new(x, y0)
+		end
+		return Vector2.new(x, y1)
+	end
+
 	-- Tab Engine
 	function Window:CreateTab(tabConfig, iconArg)
 		tabConfig = typeof(tabConfig) == "table" and tabConfig or { Name = tostring(tabConfig) }
@@ -1124,7 +1247,7 @@ function DrizxUI:CreateWindow(config)
 			return Window.Tabs[tabNameKey]
 		end
 
-		local Tab = { Name = tabNameKey, Connections = {}, Cancels = {} }
+		local Tab = { Name = tabNameKey, Connections = {}, Cancels = {}, Flags = {} }
 
 		local tabBtn = Instance.new("TextButton")
 		tabBtn.Size = UDim2.new(1, -2, 0, 30)
@@ -1351,10 +1474,12 @@ function DrizxUI:CreateWindow(config)
 		end
 
 		function Tab:CreateToggle(toggleText, defaultState, callback)
+			local flag = nil
 			if type(toggleText) == "table" then
 				local opts = toggleText
 				toggleText = opts.Name or opts.Title or "Toggle"
 				defaultState = opts.Default
+				flag = opts.Flag
 				callback = opts.Callback
 			end
 			callback = callback or function() end
@@ -1433,6 +1558,15 @@ function DrizxUI:CreateWindow(config)
 				updateToggle(not state, true)
 			end))
 
+			registerFlag(Tab, flag, "Toggle",
+				function() return state end,
+				function(value)
+					if typeof(value) == "boolean" then
+						updateToggle(value, false)
+						safeCall("Toggle", callback, state)
+					end
+				end)
+
 			return {
 				SetState = function(_, val)
 					if typeof(val) == "boolean" then
@@ -1445,6 +1579,7 @@ function DrizxUI:CreateWindow(config)
 
 		function Tab:CreateSlider(sliderText, minVal, maxVal, defaultVal, callback)
 			local increment = nil
+			local flag = nil
 			if type(sliderText) == "table" then
 				local opts = sliderText
 				sliderText = opts.Name or opts.Title or "Slider"
@@ -1452,6 +1587,7 @@ function DrizxUI:CreateWindow(config)
 				maxVal = opts.Max
 				defaultVal = opts.Default
 				increment = tonumber(opts.Increment)
+				flag = opts.Flag
 				callback = opts.Callback
 			end
 			callback = callback or function() end
@@ -1576,6 +1712,15 @@ function DrizxUI:CreateWindow(config)
 			for _, conn in ipairs(dragConns) do
 				table.insert(Tab.Connections, conn)
 			end
+
+			registerFlag(Tab, flag, "Slider",
+				function() return value end,
+				function(newValue)
+					if tonumber(newValue) then
+						applySliderValue(newValue, false)
+						safeCall("Slider", callback, value)
+					end
+				end)
 
 			return {
 				SetValue = function(_, val) applySliderValue(val, false) end,
@@ -1758,6 +1903,16 @@ function DrizxUI:CreateWindow(config)
 				setSelected(tostring(dropConfig.Default), false)
 			end
 
+			registerFlag(Tab, dropConfig.Flag, "Dropdown",
+				function() return selected end,
+				function(option)
+					local text = tostring(option)
+					if table.find(options, text) then
+						setSelected(text, false)
+						safeCall("Dropdown", callback, selected)
+					end
+				end)
+
 			return {
 				Set = function(_, option)
 					local text = tostring(option)
@@ -1837,6 +1992,13 @@ function DrizxUI:CreateWindow(config)
 				safeCall("Textbox", callback, input.Text, enterPressed)
 			end))
 
+			registerFlag(Tab, boxConfig.Flag, "Textbox",
+				function() return input.Text end,
+				function(text)
+					input.Text = tostring(text)
+					safeCall("Textbox", callback, input.Text, false)
+				end)
+
 			return {
 				Set = function(_, text) input.Text = tostring(text) end,
 				Get = function(_) return input.Text end
@@ -1844,7 +2006,533 @@ function DrizxUI:CreateWindow(config)
 		end
 
 
+		-- Divider: a thin line to separate groups of components
+		function Tab:CreateDivider()
+			local holder = Instance.new("Frame")
+			holder.Size = UDim2.new(1, -4, 0, 8)
+			holder.BackgroundTransparency = 1
+			holder.ZIndex = 4
+			holder.Parent = tabScroll
+
+			local line = Instance.new("Frame")
+			line.AnchorPoint = Vector2.new(0, 0.5)
+			line.Position = UDim2.new(0, 0, 0.5, 0)
+			line.Size = UDim2.new(1, 0, 0, 1)
+			line.BackgroundColor3 = Theme.Stroke
+			line.BorderSizePixel = 0
+			line.ZIndex = 5
+			line.Parent = holder
+		end
+
+		-- Label: plain text line that can be changed later (Set / Get)
+		function Tab:CreateLabel(labelConfig)
+			if type(labelConfig) ~= "table" then
+				labelConfig = { Text = labelConfig }
+			end
+			local lbl = Instance.new("TextLabel")
+			lbl.Size = UDim2.new(1, -4, 0, 0)
+			lbl.AutomaticSize = Enum.AutomaticSize.Y
+			lbl.BackgroundTransparency = 1
+			lbl.Text = tostring(labelConfig.Text or labelConfig.Name or "")
+			lbl.TextColor3 = Theme.SubText
+			lbl.TextSize = 10
+			lbl.Font = Enum.Font.GothamMedium
+			lbl.TextXAlignment = Enum.TextXAlignment.Left
+			lbl.TextYAlignment = Enum.TextYAlignment.Top
+			lbl.TextWrapped = true
+			lbl.ZIndex = 4
+			lbl.Parent = tabScroll
+
+			local lblPad = Instance.new("UIPadding")
+			lblPad.PaddingLeft = UDim.new(0, 4)
+			lblPad.PaddingRight = UDim.new(0, 4)
+			lblPad.Parent = lbl
+
+			return {
+				Set = function(_, text) lbl.Text = tostring(text) end,
+				Get = function(_) return lbl.Text end,
+			}
+		end
+
+		-- Color picker: tap the card to open a saturation/value map + hue bar. Works with mouse and touch.
+		function Tab:CreateColorPicker(cpConfig)
+			cpConfig = type(cpConfig) == "table" and cpConfig or {}
+			local callback = cpConfig.Callback or function() end
+
+			local HEADER_H = 32
+			local MAP_H = 92
+			local BAR_H = 12
+			local PANEL_TOP = HEADER_H + 4
+			local PANEL_H = MAP_H + 8 + BAR_H + 8 + 14
+			local OPEN_H = PANEL_TOP + PANEL_H + 8
+
+			local current = parseColor(cpConfig.Default) or Color3.fromRGB(255, 80, 80)
+			local hue, sat, val = Color3.toHSV(current)
+			local isOpenPicker = false
+
+			local cFrame = Instance.new("Frame")
+			cFrame.Size = UDim2.new(1, -4, 0, HEADER_H)
+			cFrame.BackgroundColor3 = Theme.Card
+			cFrame.BorderSizePixel = 0
+			cFrame.ClipsDescendants = true
+			cFrame.ZIndex = 4
+			cFrame.Parent = tabScroll
+
+			local cCorner = Instance.new("UICorner")
+			cCorner.CornerRadius = UDim.new(0, 6)
+			cCorner.Parent = cFrame
+
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.new(1, -62, 0, HEADER_H)
+			label.Position = UDim2.new(0, 10, 0, 0)
+			label.BackgroundTransparency = 1
+			label.Text = tostring(cpConfig.Name or cpConfig.Title or "Color")
+			label.TextColor3 = Theme.Text
+			label.TextSize = 10
+			label.Font = Enum.Font.GothamMedium
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextTruncate = Enum.TextTruncate.AtEnd
+			label.ZIndex = 5
+			label.Parent = cFrame
+
+			local swatch = Instance.new("Frame")
+			swatch.Size = UDim2.new(0, 34, 0, 18)
+			swatch.Position = UDim2.new(1, -44, 0, 7)
+			swatch.BackgroundColor3 = current
+			swatch.BorderSizePixel = 0
+			swatch.ZIndex = 5
+			swatch.Parent = cFrame
+
+			local swatchCorner = Instance.new("UICorner")
+			swatchCorner.CornerRadius = UDim.new(0, 4)
+			swatchCorner.Parent = swatch
+
+			local swatchStroke = Instance.new("UIStroke")
+			swatchStroke.Color = Theme.Stroke
+			swatchStroke.Thickness = 1
+			swatchStroke.Parent = swatch
+
+			local header = Instance.new("TextButton")
+			header.Size = UDim2.new(1, 0, 0, HEADER_H)
+			header.BackgroundTransparency = 1
+			header.Text = ""
+			header.ZIndex = 7
+			header.Parent = cFrame
+
+			local panel = Instance.new("Frame")
+			panel.Size = UDim2.new(1, -20, 0, PANEL_H)
+			panel.Position = UDim2.new(0, 10, 0, PANEL_TOP)
+			panel.BackgroundTransparency = 1
+			panel.Visible = false
+			panel.ZIndex = 5
+			panel.Parent = cFrame
+
+			-- Saturation (left to right) / value (bottom to top) map. The image is a white-to-clear and
+			-- clear-to-black overlay, so the background color is the pure hue.
+			local map = Instance.new("ImageLabel")
+			map.Size = UDim2.new(1, 0, 0, MAP_H)
+			map.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
+			map.BorderSizePixel = 0
+			map.Image = "rbxassetid://4155801252"
+			map.Active = true
+			map.ZIndex = 6
+			map.Parent = panel
+
+			local mapCorner = Instance.new("UICorner")
+			mapCorner.CornerRadius = UDim.new(0, 6)
+			mapCorner.Parent = map
+
+			local mapKnob = Instance.new("Frame")
+			mapKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+			mapKnob.Size = UDim2.new(0, 12, 0, 12)
+			mapKnob.BackgroundColor3 = current
+			mapKnob.BorderSizePixel = 0
+			mapKnob.ZIndex = 8
+			mapKnob.Parent = map
+
+			local mapKnobCorner = Instance.new("UICorner")
+			mapKnobCorner.CornerRadius = UDim.new(1, 0)
+			mapKnobCorner.Parent = mapKnob
+
+			local mapKnobStroke = Instance.new("UIStroke")
+			mapKnobStroke.Color = Color3.new(1, 1, 1)
+			mapKnobStroke.Thickness = 2
+			mapKnobStroke.Parent = mapKnob
+
+			local hueBar = Instance.new("Frame")
+			hueBar.Position = UDim2.new(0, 0, 0, MAP_H + 8)
+			hueBar.Size = UDim2.new(1, 0, 0, BAR_H)
+			hueBar.BackgroundColor3 = Color3.new(1, 1, 1)
+			hueBar.BorderSizePixel = 0
+			hueBar.Active = true
+			hueBar.ZIndex = 6
+			hueBar.Parent = panel
+
+			local hueCorner = Instance.new("UICorner")
+			hueCorner.CornerRadius = UDim.new(0, 6)
+			hueCorner.Parent = hueBar
+
+			local hueKeys = {}
+			for i = 0, 6 do
+				table.insert(hueKeys, ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(i / 6, 1, 1)))
+			end
+			local hueGradient = Instance.new("UIGradient")
+			hueGradient.Color = ColorSequence.new(hueKeys)
+			hueGradient.Parent = hueBar
+
+			local hueKnob = Instance.new("Frame")
+			hueKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+			hueKnob.Size = UDim2.new(0, 6, 0, 18)
+			hueKnob.BackgroundColor3 = Color3.new(1, 1, 1)
+			hueKnob.BorderSizePixel = 0
+			hueKnob.ZIndex = 8
+			hueKnob.Parent = hueBar
+
+			local hueKnobCorner = Instance.new("UICorner")
+			hueKnobCorner.CornerRadius = UDim.new(0, 3)
+			hueKnobCorner.Parent = hueKnob
+
+			local hueKnobStroke = Instance.new("UIStroke")
+			hueKnobStroke.Color = Color3.new(0, 0, 0)
+			hueKnobStroke.Transparency = 0.4
+			hueKnobStroke.Thickness = 1
+			hueKnobStroke.Parent = hueKnob
+
+			local hexLbl = Instance.new("TextLabel")
+			hexLbl.Position = UDim2.new(0, 0, 0, MAP_H + 8 + BAR_H + 8)
+			hexLbl.Size = UDim2.new(1, 0, 0, 14)
+			hexLbl.BackgroundTransparency = 1
+			hexLbl.TextColor3 = Theme.SubText
+			hexLbl.TextSize = 9
+			hexLbl.Font = Enum.Font.GothamMedium
+			hexLbl.TextXAlignment = Enum.TextXAlignment.Left
+			hexLbl.ZIndex = 6
+			hexLbl.Parent = panel
+
+			local function refresh(fireCallback)
+				if Window.IsDestroyed then return end
+				current = Color3.fromHSV(hue, sat, val)
+				swatch.BackgroundColor3 = current
+				map.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
+				mapKnob.Position = UDim2.new(sat, 0, 1 - val, 0)
+				mapKnob.BackgroundColor3 = current
+				hueKnob.Position = UDim2.new(hue, 0, 0.5, 0)
+				hexLbl.Text = colorToHex(current)
+				if fireCallback then
+					safeCall("ColorPicker", callback, current)
+				end
+			end
+			refresh(false)
+
+			local function setOpen(open)
+				if Window.IsDestroyed then return end
+				isOpenPicker = open
+				local info = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+				if open then
+					panel.Visible = true
+					playTween(cFrame, info, {Size = UDim2.new(1, -4, 0, OPEN_H)})
+				else
+					playTween(cFrame, info, {Size = UDim2.new(1, -4, 0, HEADER_H)}, function()
+						if not isOpenPicker and not Window.IsDestroyed then
+							panel.Visible = false
+						end
+					end)
+				end
+			end
+
+			table.insert(Tab.Connections, header.MouseButton1Click:Connect(function()
+				setOpen(not isOpenPicker)
+			end))
+
+			-- Dragging on the map / hue bar (locks the tab scroll while dragging, like the slider)
+			local function bindPicker(target, onPress, onDrag)
+				local dragConns = bindDrag(target,
+					function(input)
+						lockScroll()
+						onPress(input)
+					end,
+					onDrag,
+					function()
+						unlockScroll()
+					end
+				)
+				registerDrag(dragConns.cancel)
+				table.insert(Tab.Cancels, dragConns.cancel)
+				for _, conn in ipairs(dragConns) do
+					table.insert(Tab.Connections, conn)
+				end
+			end
+
+			local function updateMap(input, calibrate)
+				local size = map.AbsoluteSize
+				if size.X <= 0 or size.Y <= 0 then return end
+				local point = pointerPosition(input, map, calibrate)
+				sat = math.clamp((point.X - map.AbsolutePosition.X) / size.X, 0, 1)
+				val = 1 - math.clamp((point.Y - map.AbsolutePosition.Y) / size.Y, 0, 1)
+				refresh(true)
+			end
+			bindPicker(map,
+				function(input) updateMap(input, true) end,
+				function(input) updateMap(input, false) end)
+
+			local function updateHue(input)
+				local width = hueBar.AbsoluteSize.X
+				if width <= 0 then return end
+				hue = math.clamp((input.Position.X - hueBar.AbsolutePosition.X) / width, 0, 1)
+				refresh(true)
+			end
+			bindPicker(hueBar, updateHue, updateHue)
+
+			registerFlag(Tab, cpConfig.Flag, "ColorPicker",
+				function() return colorToHex(current) end,
+				function(value)
+					local parsed = parseColor(value)
+					if parsed then
+						hue, sat, val = Color3.toHSV(parsed)
+						refresh(true)
+					end
+				end)
+
+			return {
+				Set = function(_, color)
+					local parsed = parseColor(color)
+					if parsed then
+						hue, sat, val = Color3.toHSV(parsed)
+						refresh(false) -- does not fire the callback
+					end
+				end,
+				Get = function(_) return current end,
+			}
+		end
+
 		return Tab
+	end
+
+	-- Config system ----------------------------------------------------------
+	-- Components created with Flag = "name" are saved to / loaded from JSON files in the executor's
+	-- workspace folder. Needs the executor file functions (writefile, readfile, ...); without them the
+	-- Save/Load methods just return false and a message.
+	local configFolder = tostring(config.ConfigFolder or "DrizxLibrary")
+
+	local function cleanConfigName(name)
+		local cleaned = string.gsub(tostring(name or ""), "[^%w%-_ ]", "")
+		cleaned = string.gsub(cleaned, "^%s+", "")
+		cleaned = string.gsub(cleaned, "%s+$", "")
+		if cleaned == "" then return nil end
+		return cleaned
+	end
+
+	local function configPath(name)
+		return configFolder .. "/" .. name .. ".json"
+	end
+
+	local function ensureConfigFolder()
+		if type(makefolder) ~= "function" then return end
+		if type(isfolder) == "function" then
+			local ok, exists = pcall(isfolder, configFolder)
+			if ok and exists then return end
+		end
+		pcall(makefolder, configFolder)
+	end
+
+	-- Current value of every flag, as a table that can be JSON-encoded.
+	function Window:GetConfig()
+		local data = {}
+		for flag, entry in pairs(Window.Flags) do
+			local ok, value = pcall(entry.Get)
+			if ok and value ~= nil then
+				data[flag] = value
+			end
+		end
+		return data
+	end
+
+	-- Applies values to the matching flags (callbacks fire). Returns how many flags were applied.
+	function Window:ApplyConfig(data)
+		if type(data) ~= "table" then return 0 end
+		local applied = 0
+		for flag, value in pairs(data) do
+			local entry = Window.Flags[flag]
+			if entry then
+				local ok, err = pcall(entry.Set, value)
+				if ok then
+					applied = applied + 1
+				else
+					warn("[DrizxLibrary] Could not apply flag '" .. tostring(flag) .. "': " .. tostring(err))
+				end
+			end
+		end
+		return applied
+	end
+
+	function Window:GetFlag(flag)
+		local entry = Window.Flags[tostring(flag)]
+		if not entry then return nil end
+		local ok, value = pcall(entry.Get)
+		if ok then return value end
+		return nil
+	end
+
+	function Window:SetFlag(flag, value)
+		local entry = Window.Flags[tostring(flag)]
+		if not entry then return false end
+		return (pcall(entry.Set, value))
+	end
+
+	-- Returns true + the saved name, or false + an error message.
+	function Window:SaveConfig(name)
+		if Window.IsDestroyed then return false, "Window is destroyed." end
+		local clean = cleanConfigName(name)
+		if not clean then return false, "Invalid config name." end
+		if type(writefile) ~= "function" then return false, "This executor does not support writefile." end
+
+		local okEncode, json = pcall(function()
+			return HttpService:JSONEncode(Window:GetConfig())
+		end)
+		if not okEncode then return false, tostring(json) end
+
+		ensureConfigFolder()
+		local okWrite, err = pcall(writefile, configPath(clean), json)
+		if not okWrite then return false, tostring(err) end
+		return true, clean
+	end
+
+	-- Returns true + the number of applied flags, or false + an error message.
+	function Window:LoadConfig(name)
+		if Window.IsDestroyed then return false, "Window is destroyed." end
+		local clean = cleanConfigName(name)
+		if not clean then return false, "Invalid config name." end
+		if type(readfile) ~= "function" then return false, "This executor does not support readfile." end
+
+		local path = configPath(clean)
+		if type(isfile) == "function" then
+			local okExists, exists = pcall(isfile, path)
+			if okExists and not exists then return false, "Config '" .. clean .. "' does not exist." end
+		end
+
+		local okRead, raw = pcall(readfile, path)
+		if not okRead then return false, tostring(raw) end
+		local okDecode, data = pcall(function() return HttpService:JSONDecode(raw) end)
+		if not okDecode or type(data) ~= "table" then return false, "Config file is not valid JSON." end
+		return true, Window:ApplyConfig(data)
+	end
+
+	function Window:DeleteConfig(name)
+		local clean = cleanConfigName(name)
+		if not clean then return false, "Invalid config name." end
+		if type(delfile) ~= "function" then return false, "This executor does not support delfile." end
+
+		local path = configPath(clean)
+		if type(isfile) == "function" then
+			local okExists, exists = pcall(isfile, path)
+			if okExists and not exists then return false, "Config '" .. clean .. "' does not exist." end
+		end
+		local ok, err = pcall(delfile, path)
+		if not ok then return false, tostring(err) end
+		return true, clean
+	end
+
+	-- Names of the saved configs (empty if the executor has no listfiles).
+	function Window:ListConfigs()
+		local names = {}
+		if type(listfiles) ~= "function" then return names end
+		local ok, files = pcall(listfiles, configFolder)
+		if not ok or type(files) ~= "table" then return names end
+		for _, path in ipairs(files) do
+			local name = string.match(tostring(path), "([^/\\]+)%.json$")
+			if name then table.insert(names, name) end
+		end
+		table.sort(names)
+		return names
+	end
+
+	-- Ready-made tab: config name box, saved-config list and Save / Load / Delete buttons.
+	function Window:CreateConfigTab(tabName, icon)
+		local ConfigTab = Window:CreateTab(tabName or "Config", icon or "Settings")
+		local selected = ""
+
+		local function report(title, content)
+			if not Window.IsDestroyed then
+				Window:Notify({ Title = title, Content = tostring(content), Duration = 2.5 })
+			end
+		end
+
+		local function currentName()
+			if selected ~= "" then return selected end
+			return "default"
+		end
+
+		ConfigTab:CreateSection("Configs")
+
+		if type(writefile) ~= "function" or type(readfile) ~= "function" then
+			ConfigTab:CreateParagraph({
+				Title = "File saving unavailable",
+				Content = "Your executor does not provide file functions (writefile / readfile), so configs cannot be saved or loaded.",
+			})
+			return ConfigTab
+		end
+
+		local nameBox = ConfigTab:CreateTextbox({
+			Name = "Config name",
+			Placeholder = "default",
+			Callback = function(text) selected = tostring(text) end,
+		})
+
+		local savedList = ConfigTab:CreateDropdown({
+			Name = "Saved configs",
+			Options = Window:ListConfigs(),
+			Callback = function(option)
+				selected = tostring(option)
+				nameBox:Set(selected)
+			end,
+		})
+
+		ConfigTab:CreateButton({
+			Name = "Save config",
+			Callback = function()
+				local ok, result = Window:SaveConfig(currentName())
+				if ok then
+					report("Config saved", result)
+					savedList:Refresh(Window:ListConfigs())
+				else
+					report("Save failed", result)
+				end
+			end,
+		})
+
+		ConfigTab:CreateButton({
+			Name = "Load config",
+			Callback = function()
+				local ok, result = Window:LoadConfig(currentName())
+				if ok then
+					report("Config loaded", tostring(result) .. " settings applied")
+				else
+					report("Load failed", result)
+				end
+			end,
+		})
+
+		ConfigTab:CreateButton({
+			Name = "Delete config",
+			Callback = function()
+				local ok, result = Window:DeleteConfig(currentName())
+				if ok then
+					report("Config deleted", result)
+					savedList:Refresh(Window:ListConfigs())
+				else
+					report("Delete failed", result)
+				end
+			end,
+		})
+
+		ConfigTab:CreateButton({
+			Name = "Refresh list",
+			Callback = function()
+				savedList:Refresh(Window:ListConfigs())
+			end,
+		})
+
+		return ConfigTab
 	end
 
 	-- Window Management API
@@ -1857,6 +2545,11 @@ function DrizxUI:CreateWindow(config)
 			end
 			for _, conn in ipairs(tabObj.Connections) do
 				pcall(function() conn:Disconnect() end)
+			end
+			for flagName, entry in pairs(tabObj.Flags or {}) do
+				if Window.Flags[flagName] == entry then
+					Window.Flags[flagName] = nil
+				end
 			end
 			if tabObj.Button then tabObj.Button:Destroy() end
 			if tabObj.Container then tabObj.Container:Destroy() end
