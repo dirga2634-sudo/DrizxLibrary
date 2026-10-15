@@ -2,7 +2,7 @@
 
 Lightweight Roblox UI library built for touch screens (mobile) and PC.
 
-**Version:** 13.2.0
+**Version:** 13.3.0
 **Creators:** absorpohonods & haibung03
 
 ## Features
@@ -12,7 +12,9 @@ Lightweight Roblox UI library built for touch screens (mobile) and PC.
 - **Fully customizable floating button** (your own asset id, size, shape, colors, border) and **customizable menu** (size, background color/image, corners, border, header icon)
 - Animated **loading screen** (spinner, progress bar, status text)
 - **Minimize** (collapse to the header) and **Close** (remove the UI completely)
-- Tabs with icons, plus Section, Paragraph, Button, Toggle, Slider, Dropdown and Textbox components
+- Tabs with icons, plus Section, Paragraph, Label, Divider, Button, Toggle, Slider, Dropdown, Textbox and **ColorPicker** components
+- **Config saving/loading** (flags): save every setting to a file and load it back later
+- Soft drop shadow behind the menu
 - Dark / Light themes with per-color overrides
 - Notifications
 - Responsive layout that follows the viewport size
@@ -99,6 +101,7 @@ All fields are optional.
 | `LoadingSteps` | table | `{"Loading modules...", "Preparing UI...", "Almost done..."}` | Status texts shown as the progress advances. |
 | `AutoOpen` | boolean | `true` | Open the window automatically once loading finishes. |
 | `CloseAction` | string | `"Destroy"` | `"Destroy"` removes the UI; `"Hide"` only hides the window. |
+| `ConfigFolder` | string | `"DrizxLibrary"` | Folder (in the executor workspace) where config files are stored. |
 
 ### `Library:Notify(config)`
 
@@ -201,6 +204,8 @@ local Window = Library:CreateWindow({
 | `StrokeColor` | Color3 | theme `Stroke` | Border color. |
 | `StrokeThickness` | number | `1.2` | Border thickness. |
 | `Icon` | string / number | `Logo` | Icon shown in the header. |
+| `Shadow` | boolean | `true` | Soft drop shadow behind the menu. |
+| `ShadowTransparency` | number | `0.55` | `0` (dark) to `1` (invisible). |
 
 Change it at any time:
 
@@ -251,6 +256,19 @@ Creates a tab in the sidebar. The icon defaults to `"Code"`. Calling it again wi
 ### `Window:Toggle()`
 
 Opens the window if it is closed, or hides it if it is open.
+
+### Config methods
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Window:SaveConfig(name)` | `true, name` or `false, message` | Writes all flags to a file. |
+| `Window:LoadConfig(name)` | `true, appliedCount` or `false, message` | Reads a file and applies it (callbacks fire). |
+| `Window:DeleteConfig(name)` | `true, name` or `false, message` | Deletes a config file. |
+| `Window:ListConfigs()` | table of names | Saved configs (empty if the executor has no `listfiles`). |
+| `Window:GetConfig()` | table | Current value of every flag. |
+| `Window:ApplyConfig(table)` | number | Applies a table of flag values. |
+| `Window:GetFlag(flag)` / `Window:SetFlag(flag, value)` | value / boolean | Read or set a single flag (`SetFlag` fires the callback). |
+| `Window:CreateConfigTab(name, icon)` | `Tab` | Ready-made config tab (default name `"Config"`). |
 
 ### `Window:SetFloatingButton(options)` / `Window:SetFloatingButton(assetId)`
 
@@ -390,6 +408,64 @@ box:Set("hello")
 print(box:Get())
 ```
 
+### `Tab:CreateColorPicker({ Name, Default, Callback, Flag })`
+
+Tap the card to open a saturation/value map and a hue bar. Drag on either one (mouse or touch). The callback receives a `Color3` and fires while you drag.
+
+```lua
+local picker = Tab:CreateColorPicker({
+    Name = "Box color",
+    Default = Color3.fromRGB(255, 50, 50),
+    Callback = function(color)
+        print(color)
+    end,
+})
+
+picker:Set(Color3.fromRGB(0, 255, 120)) -- also accepts "#00FF78"; does not fire the callback
+print(picker:Get())                       -- Color3
+```
+
+### `Tab:CreateLabel(text)` / `Tab:CreateLabel({ Text })`
+
+A plain text line you can change later.
+
+```lua
+local status = Tab:CreateLabel("Waiting...")
+status:Set("Connected")
+print(status:Get())
+```
+
+### `Tab:CreateDivider()`
+
+A thin line to separate groups of components.
+
+---
+
+## Flags and configs
+
+Give a component a `Flag` and its value becomes part of the window's config. Flags work on Toggle, Slider, Dropdown, Textbox and ColorPicker.
+
+```lua
+Tab:CreateToggle({ Name = "ESP", Default = false, Flag = "esp_enabled", Callback = function(v) print(v) end })
+Tab:CreateSlider({ Name = "FOV", Min = 40, Max = 120, Default = 70, Flag = "fov", Callback = print })
+Tab:CreateColorPicker({ Name = "Box color", Flag = "box_color", Callback = print })
+
+-- A ready-made tab with a name box, the list of saved configs, and Save / Load / Delete buttons:
+Window:CreateConfigTab()
+```
+
+Or use the methods directly:
+
+```lua
+local ok, result = Window:SaveConfig("legit")   -- true, "legit"
+local ok, applied = Window:LoadConfig("legit")  -- true, number of settings applied
+```
+
+- Loading a config applies the values **and fires each component's callback**, so your script's own state is updated too.
+- Configs are JSON files in `<ConfigFolder>/<name>.json`. Colors are stored as `"#RRGGBB"`.
+- Saving needs the executor's file functions (`writefile`, `readfile`, and for the list/delete features `listfiles`, `delfile`, `isfile`, `makefolder`). If something is missing, the method returns `false` and a message, and nothing breaks.
+- Config names may contain letters, numbers, spaces, `-` and `_`.
+
 ---
 
 ## Themes
@@ -483,7 +559,52 @@ end)
 
 ---
 
+## Troubleshooting
+
+### `attempt to call a nil value` on line 1
+
+The error points at line 1 of your own script, not at the library. It means `loadstring(...)` returned `nil`, so the loader line `loadstring(game:HttpGet(url))()` ended up calling `nil`. The usual cause is that the URL did not return the library code (for example `404: Not Found`: wrong username/repo/branch/file name, the file was not pushed yet, or the repo is private). Raw GitHub links can also be cached for a few minutes after you push a change.
+
+Use this loader to see the real reason:
+
+```lua
+local url = "https://raw.githubusercontent.com/USERNAME/REPO/main/Library.lua"
+
+local ok, src = pcall(game.HttpGet, game, url)
+if not ok then return warn("HttpGet failed:", src) end
+print("fetched", #src, "characters, starts with:", string.sub(src, 1, 40))
+
+local fn, err = loadstring(src)
+if not fn then return warn("loadstring failed:", err) end
+
+local Library = fn()
+```
+
+- Starts with `404: Not Found` or `<!DOCTYPE`: the URL is wrong or the file is not published at that path.
+- Starts with `--[[` and the size looks right (around 70,000 characters): the file was fetched correctly.
+- `loadstring failed: ...`: the message includes the line number of the problem inside the file.
+
+To rule out the network completely, put `Library.lua` in your executor's workspace folder and load it locally:
+
+```lua
+local Library = loadstring(readfile("Library.lua"))()
+```
+
+---
+
+## Credits
+
+The menu shadow image (`rbxassetid://8992230677`) and the color picker map (`rbxassetid://4155801252`) are borrowed from AbsorpohonodsUI (MIT license).
+
+---
+
 ## Changelog
+
+### 13.3.0
+- Added `Tab:CreateColorPicker` (saturation/value map + hue bar, touch friendly).
+- Added `Tab:CreateLabel` and `Tab:CreateDivider`.
+- Added flags and configs: `Flag` option, `Window:SaveConfig`, `LoadConfig`, `DeleteConfig`, `ListConfigs`, `GetConfig`, `ApplyConfig`, `GetFlag`, `SetFlag`, `CreateConfigTab`, and the `ConfigFolder` window option. Needs executor file functions; everything is guarded when they are missing.
+- Added a soft drop shadow behind the menu (`Menu.Shadow`, `Menu.ShadowTransparency`).
 
 ### 13.2.0
 - The floating button is now fully customizable: your own asset id, size, shape, colors, border, position (`FloatingButton`, `FloatingIcon`, `Window:SetFloatingButton`).
