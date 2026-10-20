@@ -2,7 +2,7 @@
 
 Lightweight Roblox UI library built for touch screens (mobile) and PC.
 
-**Version:** 13.3.0
+**Version:** 13.6.0
 **Creators:** absorpohonods & haibung03
 
 ## Features
@@ -15,7 +15,9 @@ Lightweight Roblox UI library built for touch screens (mobile) and PC.
 - Tabs with icons, plus Section, Paragraph, Label, Divider, Button, Toggle, Slider, Dropdown, Textbox and **ColorPicker** components
 - **Config saving/loading** (flags): save every setting to a file and load it back later
 - Soft drop shadow behind the menu
-- Dark / Light themes with per-color overrides
+- **Built-in vector icons** (no asset ids needed, so they work on every phone and PC)
+- 7 built-in themes (`Dark`, `Light`, `Ocean`, `Emerald`, `Rose`, `Amethyst`, `Amber`) with per-color overrides
+- Polished look: animated tab indicator, switch-style toggles, sliders with a draggable handle, dropdown check marks, input focus borders, hover highlights on PC, slide-in notifications, touch-friendly rows and larger text
 - Notifications
 - Responsive layout that follows the viewport size
 - Clean teardown: every connection, tween and drag is cleaned up on destroy
@@ -87,7 +89,7 @@ All fields are optional.
 | `Title` | string | `"DrizxLibrary"` | Window title shown in the header. |
 | `SubTitle` | string | `"v" .. Library.Version` | Text shown after the title. |
 | `Logo` | string / number | `"Zap"` | Icon preset name, asset id, or `rbxassetid://...`. Used in the header, floating button and loading card. |
-| `Theme` | string / table | `"Dark"` | `"Dark"`, `"Light"`, or an override table (see [Themes](#themes)). |
+| `Theme` | string / table | `"Dark"` | A theme name (`"Dark"`, `"Light"`, `"Ocean"`, `"Emerald"`, `"Rose"`, `"Amethyst"`, `"Amber"`) or an override table (see [Themes](#themes)). |
 | `FloatingButton` | table / asset id | `nil` | Customize the floating button. See [Floating button](#floating-button). |
 | `FloatingIcon` | string / number | `nil` | Shorthand for `FloatingButton.Icon`. |
 | `Menu` | table | `nil` | Customize the menu (main window). See [Menu](#menu). |
@@ -102,6 +104,8 @@ All fields are optional.
 | `AutoOpen` | boolean | `true` | Open the window automatically once loading finishes. |
 | `CloseAction` | string | `"Destroy"` | `"Destroy"` removes the UI; `"Hide"` only hides the window. |
 | `ConfigFolder` | string | `"DrizxLibrary"` | Folder (in the executor workspace) where config files are stored. |
+| `ToggleKey` | `Enum.KeyCode` / string | `nil` | PC shortcut that opens and closes the menu, e.g. `Enum.KeyCode.RightShift` or `"RightShift"`. |
+| `AutoLocalize` | boolean | `false` | Roblox auto-translates UI text for players with a non-English language ("Settings" becomes "Pengaturan"). The library turns that off so your text stays as written. Set `true` to allow translation. |
 
 ### `Library:Notify(config)`
 
@@ -251,7 +255,8 @@ Creates a tab in the sidebar. The icon defaults to `"Code"`. Calling it again wi
 | `Title` | string | `"Notification"` | Notification title. |
 | `Content` | string | `""` | Notification body text. |
 | `Duration` | number | `3` | Seconds before it fades out (minimum `0.5`). |
-| `Icon` | string / number | `"Bell"` | Icon preset name or asset id. |
+| `Type` | string | `"Info"` | `"Info"`, `"Success"`, `"Warning"` or `"Error"`. Changes the color and the default icon. |
+| `Icon` | string / number | depends on `Type` | Icon preset name or asset id (`Bell` for Info, `Check`, `Warning`, `Error`). |
 
 ### `Window:Toggle()`
 
@@ -376,9 +381,9 @@ slider:SetValue(50) -- does not fire the callback
 print(slider:GetValue())
 ```
 
-### `Tab:CreateDropdown({ Name, Options, Default, Callback })`
+### `Tab:CreateDropdown({ Name, Options, Default, Multi, Callback, Flag })`
 
-The callback receives the selected option (as a string). Duplicate options are removed.
+The callback receives the selected option (as a string). Duplicate options are removed. The selected option gets a check mark.
 
 ```lua
 local dropdown = Tab:CreateDropdown({
@@ -391,6 +396,21 @@ local dropdown = Tab:CreateDropdown({
 dropdown:Set("Hard")               -- does not fire the callback
 print(dropdown:Get())
 dropdown:Refresh({ "A", "B", "C" }) -- replace the options
+```
+
+With `Multi = true` the player can tick several options. The list stays open while picking, the callback receives a **list** of the selected names, and `Default`, `Set`, `Get` and the saved config value are lists too.
+
+```lua
+Tab:CreateDropdown({
+    Name = "ESP parts",
+    Options = { "Box", "Skeleton", "Distance", "Health" },
+    Default = { "Box" },
+    Multi = true,
+    Flag = "esp_parts",
+    Callback = function(list)
+        print(table.concat(list, ", "))
+    end,
+})
 ```
 
 ### `Tab:CreateTextbox({ Name, Placeholder, Default, ClearOnFocus, Callback })`
@@ -406,6 +426,24 @@ local box = Tab:CreateTextbox({
 
 box:Set("hello")
 print(box:Get())
+```
+
+### `Tab:CreateKeybind({ Name, Default, Callback, OnChanged, Flag })`
+
+For keyboards (PC). Click the key box, then press a key to bind it; `Escape` clears the binding. `Callback` runs every time the bound key is pressed (not while typing in a text box). `OnChanged(keyName)` runs when the binding changes.
+
+```lua
+local bind = Tab:CreateKeybind({
+    Name = "Toggle ESP",
+    Default = "E",                  -- an Enum.KeyCode or its name
+    Flag = "esp_key",
+    Callback = function(key)
+        print("pressed", key)
+    end,
+})
+
+bind:Set("Q")      -- does not fire the callbacks
+print(bind:Get())  -- Enum.KeyCode.Q (or nil)
 ```
 
 ### `Tab:CreateColorPicker({ Name, Default, Callback, Flag })`
@@ -443,7 +481,7 @@ A thin line to separate groups of components.
 
 ## Flags and configs
 
-Give a component a `Flag` and its value becomes part of the window's config. Flags work on Toggle, Slider, Dropdown, Textbox and ColorPicker.
+Give a component a `Flag` and its value becomes part of the window's config. Flags work on Toggle, Slider, Dropdown, Textbox, Keybind and ColorPicker.
 
 ```lua
 Tab:CreateToggle({ Name = "ESP", Default = false, Flag = "esp_enabled", Callback = function(v) print(v) end })
@@ -470,7 +508,23 @@ local ok, applied = Window:LoadConfig("legit")  -- true, number of settings appl
 
 ## Themes
 
-`Theme` can be a preset name or a table:
+`Theme` can be a preset name or a table. Built-in presets:
+
+| Preset | Look |
+| --- | --- |
+| `Dark` | Default. Layered dark blue-gray with a blue accent. |
+| `Light` | Light gray and white with a blue accent. |
+| `Ocean` | Dark with a cyan accent. |
+| `Emerald` | Dark with a green accent. |
+| `Rose` | Dark with a pink accent. |
+| `Amethyst` | Dark with a purple accent. |
+| `Amber` | Dark with an orange accent. |
+
+```lua
+Library:CreateWindow({ Theme = "Ocean" })
+```
+
+You can also start from a preset and change single colors:
 
 ```lua
 -- Preset
@@ -494,7 +548,7 @@ Available color tokens:
 | `Surface` | Header, sidebar, content area |
 | `Raised` | Active tab, buttons, tracks |
 | `Stroke` | Borders |
-| `Accent` | Highlights, progress, spinner |
+| `Accent` | Toggles, slider fill, active tab, section titles, spinner, focus borders |
 | `Text` | Primary text |
 | `SubText` | Secondary text |
 | `Muted` | Section headings, placeholders |
@@ -510,14 +564,18 @@ Unknown theme names fall back to `Dark` with a warning in the output.
 
 Anywhere an icon is accepted (`Logo`, `FloatingButton.Icon`, `Menu.Icon`, tab icons, notification icons) you can pass:
 
-- a preset name: `Home`, `Settings`, `Chat`, `Player`, `Zap`, `Search`, `Shield`, `Code`, `Bell`, `Globe`, `Key`, `Palette`
-- an asset id (number or numeric string), e.g. `10723415903`
+- a **preset name** (not case sensitive): `Home`, `Settings`, `Chat`, `Player`, `Zap`, `Search`, `Shield`, `Code`, `Bell`, `Globe`, `Key`, `Palette`, `Eye`, `Target`, `Folder`, `ChevronDown`, `ChevronRight`, `Check`, `Info`, `Warning`, `Error`
+- an **asset id** (number or numeric string), e.g. `10723415903`
 - a full asset string, e.g. `"rbxassetid://10723415903"` (`rbxthumb://` and `rbxasset://` also work)
 - a `roblox.com/asset/?id=...` link
 
-Preset icons are tinted with the theme's text color. Your own images (asset ids) are shown exactly as they are, with no tint, unless you set `ImageColor`.
+`Library:GetIcons()` returns the list of preset names.
 
-If your image shows up blank, make sure you are using the **Image** asset id and not the **Decal** id.
+**Preset icons are drawn in code** from simple shapes on a 16x16 grid. They need no asset, so they look the same on every phone and PC, scale to any size, and follow the theme colors (text color normally, accent color for the active tab).
+
+**Your own images** (asset ids) are shown exactly as they are, with no tint, unless you set `ImageColor`. If your image shows up blank, make sure you are using the **Image** asset id and not the **Decal** id, and that the asset is public.
+
+If a tab icon can't be understood, the library prints a warning and uses the `Code` icon instead.
 
 ---
 
@@ -592,13 +650,30 @@ local Library = loadstring(readfile("Library.lua"))()
 
 ---
 
-## Credits
-
-The menu shadow image (`rbxassetid://8992230677`) and the color picker map (`rbxassetid://4155801252`) are borrowed from AbsorpohonodsUI (MIT license).
-
----
-
 ## Changelog
+
+### 13.6.0
+- Notifications have a `Type` (`Info`, `Success`, `Warning`, `Error`) that sets the color and the default icon.
+- Dropdowns support `Multi = true` (tick several options, the callback gets a list).
+- New `Tab:CreateKeybind` component and a `ToggleKey` window option for PC. All keybinds share one keyboard listener.
+- New preset icons: `Info`, `Warning`, `Error`.
+
+### 13.5.0
+- Visual overhaul. Cards now stand out from the background (layered colors, faint borders, subtle gradients on the window and header, accent line under the header).
+- Tabs: animated accent indicator, icon and text turn to the accent color, hover highlight on PC.
+- Components: switch-style toggle, slider with a draggable handle and a value pill, buttons with an arrow and a press flash, dropdown with a check mark on the selected option, textbox with an accent border while typing, color picker and paragraph restyled, section headers with a line.
+- Larger text and taller rows (easier to read and tap on phones). Hover effects only appear when a mouse is present.
+- Notifications slide in with an icon bubble and an accent edge.
+- New themes: `Ocean`, `Emerald`, `Rose`, `Amethyst`, `Amber`. New icons: `ChevronRight`, `Check`.
+- Toggles and sliders now use the theme's accent color instead of a fixed green.
+
+### 13.4.0
+- Preset icons are now vector icons drawn in code instead of Roblox asset ids. Some of the old assets failed to load on certain devices (blank icons), and a few did not match their names. Added `Eye`, `Target`, `Folder` and `ChevronDown`, and `Library:GetIcons()`.
+- The dropdown arrow is drawn from shapes too (the old text arrow showed as an empty box on many phones).
+- UI text is no longer auto-translated by Roblox (`AutoLocalize` option).
+- Less lag on PC: sliders, color pickers and buttons no longer keep global input listeners while idle; they only listen while you are dragging.
+- Invalid `Logo` values now fall back to the `Zap` icon with a warning.
+- The menu shadow and the color picker map no longer use image assets (stacked translucent frames and gradients instead), so the library works without loading any asset.
 
 ### 13.3.0
 - Added `Tab:CreateColorPicker` (saturation/value map + hue bar, touch friendly).
